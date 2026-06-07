@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /* eslint-disable vue/no-v-html */
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { ref, computed, watch, onUnmounted, onUpdated, nextTick } from 'vue';
 import {
   PhTextAlignLeft,
   PhSpinnerGap,
@@ -12,6 +12,7 @@ import {
   PhCopy,
 } from '@phosphor-icons/vue';
 import { useI18n } from 'vue-i18n';
+import { useArticleRendering } from '@/composables/article/useArticleRendering';
 
 interface Props {
   summaryResult: {
@@ -47,6 +48,8 @@ const showSummary = ref(true);
 const showThinking = ref(false);
 const isAnimating = ref(false);
 const isCopying = ref(false);
+const summaryContentEl = ref<HTMLElement | null>(null);
+const { renderMathFormulas, highlightCodeBlocks } = useArticleRendering();
 
 // Enhanced loading states
 const loadingTime = ref(0);
@@ -146,6 +149,26 @@ async function handleSummaryLinkClick(event: MouseEvent) {
     }
   }
 }
+
+async function enhanceSummaryRendering() {
+  await nextTick();
+  if (!summaryContentEl.value || !showSummary.value) return;
+
+  renderMathFormulas(summaryContentEl.value);
+  highlightCodeBlocks(summaryContentEl.value);
+}
+
+watch(
+  () => [props.summaryResult?.html, props.summaryResult?.summary, showSummary.value],
+  () => {
+    enhanceSummaryRendering();
+  },
+  { immediate: true, flush: 'post' }
+);
+
+onUpdated(() => {
+  enhanceSummaryRendering();
+});
 </script>
 
 <template>
@@ -262,6 +285,7 @@ async function handleSummaryLinkClick(event: MouseEvent) {
 
           <!-- Summary Content -->
           <div
+            ref="summaryContentEl"
             class="text-xs text-text-primary leading-snug select-text prose prose-xs max-w-none"
             @click="handleSummaryLinkClick"
             v-html="summaryResult.html || summaryResult.summary"

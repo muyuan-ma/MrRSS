@@ -858,8 +858,9 @@ watch(
 // but the watch above only monitors props.articleContent
 watch(fullArticleContent, async (content) => {
   if (content) {
-    // Wait for v-html to update the DOM before attaching event listeners
+    // Wait for v-html to update the DOM before applying rendering enhancements
     await nextTick();
+    await enhanceRendering('.prose-content');
     await reattachImageInteractions();
   }
 });

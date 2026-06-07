@@ -80,21 +80,456 @@ hljs.registerLanguage('diff', diff);
 hljs.registerLanguage('plaintext', plaintext);
 hljs.registerLanguage('text', plaintext);
 
+const katexMacros = {
+  '\\msign': '\\operatorname{msign}',
+  '\\sign': '\\operatorname{sign}',
+  '\\diag': '\\operatorname{diag}',
+  '\\rank': '\\operatorname{rank}',
+  '\\tr': '\\operatorname{tr}',
+  '\\trace': '\\operatorname{tr}',
+  '\\argmax': '\\operatorname*{arg\\,max}',
+  '\\argmin': '\\operatorname*{arg\\,min}',
+};
+
+const simpleInlineTags = new Set([
+  'BR',
+  'SPAN',
+  'B',
+  'I',
+  'EM',
+  'STRONG',
+  'SUB',
+  'SUP',
+  'SMALL',
+  'MARK',
+  'U',
+  'S',
+]);
+
 /**
  * Composable for enhanced article content rendering
  * Handles math formulas, code syntax highlighting, and other advanced rendering
  */
 export function useArticleRendering() {
+  interface MathMatch {
+    start: number;
+    end: number;
+    math: string;
+    isDisplay: boolean;
+    environment?: string;
+  }
+
+  function normalizeEscapedCommandBackslashes(math: string): string {
+    return math.replace(/\\\\(?=[A-Za-z])/g, '\\');
+  }
+
+  function stripOuterMathDelimiters(math: string): string {
+    let result = math.trim();
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      const delimiterPairs = [
+        { open: '\\\\(', close: '\\\\)' },
+        { open: '\\\\[', close: '\\\\]' },
+        { open: '\\(', close: '\\)' },
+        { open: '\\[', close: '\\]' },
+        { open: '$$', close: '$$' },
+      ];
+
+      for (const { open, close } of delimiterPairs) {
+        if (
+          result.startsWith(open) &&
+          result.endsWith(close) &&
+          result.length > open.length + close.length
+        ) {
+          result = result.slice(open.length, -close.length).trim();
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  function normalizeTextCommands(math: string): string {
+    return math.replace(/\\text\{([^{}]*)\}/g, (_match, content: string) => {
+      const escapedContent = content.replace(/(^|[^\\])_/g, '$1\\_');
+      return `\\text{${escapedContent}}`;
+    });
+  }
+
+  function stripLocalMacroDefinitions(math: string): string {
+    let result = '';
+    let index = 0;
+
+    while (index < math.length) {
+      const command =
+        math.startsWith('\\newcommand', index) || math.startsWith('\\renewcommand', index)
+          ? math.startsWith('\\renewcommand', index)
+            ? '\\renewcommand'
+            : '\\newcommand'
+          : '';
+
+      if (!command) {
+        result += math[index];
+        index += 1;
+        continue;
+      }
+
+      let nextIndex = index + command.length;
+      const firstGroupEnd = consumeLatexGroup(math, nextIndex);
+      if (firstGroupEnd === null) {
+        result += math[index];
+        index += 1;
+        continue;
+      }
+
+      nextIndex = firstGroupEnd;
+      const secondGroupEnd = consumeLatexGroup(math, nextIndex);
+      if (secondGroupEnd === null) {
+        result += math[index];
+        index += 1;
+        continue;
+      }
+
+      index = secondGroupEnd;
+    }
+
+    return result.trim();
+  }
+
+  function stripUnsupportedMathAnnotations(math: string): string {
+    return math
+      .replace(/\\label\{[^{}]*\}/g, '')
+      .replace(/\\tag\{[^{}]*\}/g, '')
+      .replace(/\\eqref\{[^{}]*\}/g, '')
+      .replace(/\\ref\{[^{}]*\}/g, '')
+      .replace(/\\labeleq\s*:\s*[-\w]+/g, '')
+      .replace(/\\eqrefeq\s*:\s*[-\w]+/g, '')
+      .replace(/\s+([&\\])/g, ' $1')
+      .trim();
+  }
+
+  function cleanMathContent(math: string): string {
+    return normalizeTextCommands(
+      stripUnsupportedMathAnnotations(stripLocalMacroDefinitions(stripOuterMathDelimiters(math)))
+    );
+  }
+
+  function consumeLatexGroup(source: string, startIndex: number): number | null {
+    let index = startIndex;
+    while (index < source.length && /\s/.test(source[index])) {
+      index += 1;
+    }
+
+    if (source[index] !== '{') {
+      return null;
+    }
+
+    let depth = 0;
+    for (; index < source.length; index += 1) {
+      const char = source[index];
+
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+
+      if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          return index + 1;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function normalizeMathContent(math: string, environment?: string): string {
+    const trimmedMath = stripOuterMathDelimiters(normalizeEscapedCommandBackslashes(math.trim()));
+    if (!environment) {
+      const wrappedEnvironment = trimmedMath.match(/^\\begin\{([a-zA-Z*]+)\}([\s\S]+)\\end\{\1\}$/);
+      if (wrappedEnvironment) {
+        return normalizeMathContent(wrappedEnvironment[2], wrappedEnvironment[1]);
+      }
+
+      return cleanMathContent(trimmedMath);
+    }
+
+    const normalizedEnvironment = environment.replace(/\*$/, '');
+
+    if (normalizedEnvironment === 'equation') {
+      return normalizeMathContent(cleanMathContent(trimmedMath));
+    }
+    if (normalizedEnvironment === 'align') {
+      return `\\begin{aligned}${cleanMathContent(trimmedMath)}\\end{aligned}`;
+    }
+    if (normalizedEnvironment === 'gather') {
+      return `\\begin{gathered}${cleanMathContent(trimmedMath)}\\end{gathered}`;
+    }
+
+    return `\\begin{${environment}}${cleanMathContent(trimmedMath)}\\end{${environment}}`;
+  }
+
+  function createMathElement(math: string, isDisplay: boolean, environment?: string): HTMLElement {
+    const mathElement = document.createElement(isDisplay ? 'div' : 'span');
+    mathElement.className = isDisplay ? 'katex-display' : 'katex-inline';
+    katex.render(normalizeMathContent(math, environment), mathElement, {
+      displayMode: isDisplay,
+      throwOnError: false,
+      strict: false,
+      macros: katexMacros,
+    });
+    return mathElement;
+  }
+
+  function getMathMatches(text: string, includeBareMathBlock: boolean = false): MathMatch[] {
+    // Order matters: wrappers should be matched before raw environments to avoid nested duplicates.
+    const mathPatterns = [
+      // Display wrappers should win over inline delimiters nested inside them.
+      { regex: /\\\\\[([\s\S]+?)\\\\\]/g, isDisplay: true },
+      // Display math: $$...$$
+      { regex: /\$\$([\s\S]+?)\$\$/g, isDisplay: true },
+      // Display math: \[...\]
+      { regex: /\\\[([\s\S]+?)\\\]/g, isDisplay: true },
+      { regex: /\\\\begin\{([a-zA-Z*]+)\}([\s\S]+?)\\\\end\{\1\}/g, isDisplay: true },
+      // LaTeX environments: \begin{equation}...\end{equation}
+      { regex: /\\begin\{([a-zA-Z*]+)\}([\s\S]+?)\\end\{\1\}/g, isDisplay: true },
+      // Markdown/HTML converted summaries can preserve escaped delimiters as \\(...\\).
+      { regex: /\\\\\(([\s\S]+?)\\\\\)/g, isDisplay: false },
+      // Inline math: \(...\)
+      { regex: /\\\(([\s\S]+?)\\\)/g, isDisplay: false },
+      // Inline math: $...$ (single line, not empty, not starting/ending with space)
+      { regex: /\$([^\s$][^$\n]*[^\s$]|\S)\$/g, isDisplay: false },
+    ];
+
+    const allMatches: MathMatch[] = [];
+
+    for (const { regex, isDisplay } of mathPatterns) {
+      let match;
+      regex.lastIndex = 0;
+      while ((match = regex.exec(text)) !== null) {
+        const matchStart = match.index;
+        const matchEnd = match.index + match[0].length;
+        const isOverlapping = allMatches.some((m) => matchStart < m.end && matchEnd > m.start);
+
+        if (!isOverlapping) {
+          allMatches.push({
+            start: matchStart,
+            end: matchEnd,
+            math: match[2] ?? match[1],
+            isDisplay,
+            environment: match[2] ? match[1] : undefined,
+          });
+        }
+      }
+    }
+
+    if (includeBareMathBlock && allMatches.length === 0 && isBareMathBlock(text)) {
+      allMatches.push({
+        start: 0,
+        end: text.length,
+        math: text,
+        isDisplay: true,
+      });
+    }
+
+    if (allMatches.length === 0) {
+      const danglingDollarMatch = getDanglingDollarMathMatch(text);
+      if (danglingDollarMatch) {
+        allMatches.push(danglingDollarMatch);
+      }
+    }
+
+    return allMatches.sort((a, b) => a.start - b.start);
+  }
+
+  function getDanglingDollarMathMatch(text: string): MathMatch | null {
+    const firstDollar = text.indexOf('$');
+    if (firstDollar === -1 || text.indexOf('$', firstDollar + 1) !== -1) {
+      return null;
+    }
+
+    const beforeDollar = text.slice(0, firstDollar);
+    const afterDollar = text.slice(firstDollar + 1);
+    const afterMath = afterDollar.trim();
+    if (looksLikeMathExpression(afterMath) && !containsCJK(afterMath)) {
+      const leadingWhitespace = afterDollar.length - afterDollar.trimStart().length;
+      return {
+        start: firstDollar,
+        end: text.length,
+        math: afterDollar.slice(leadingWhitespace),
+        isDisplay: false,
+      };
+    }
+
+    const beforeMath = beforeDollar.trim();
+    if (looksLikeMathExpression(beforeMath) && !containsCJK(beforeMath)) {
+      const mathStart = beforeDollar.length - beforeDollar.trimStart().length;
+      return {
+        start: mathStart,
+        end: firstDollar + 1,
+        math: beforeMath,
+        isDisplay: false,
+      };
+    }
+
+    return null;
+  }
+
+  function looksLikeMathExpression(text: string): boolean {
+    const trimmedText = text.trim();
+    if (trimmedText.length < 2) return false;
+
+    return /\\[a-zA-Z]+|[_^{}]|[=<>]/.test(trimmedText);
+  }
+
+  function containsCJK(text: string): boolean {
+    return /[\u4e00-\u9fff]/.test(text);
+  }
+
+  function isBareMathBlock(text: string): boolean {
+    const trimmedText = text.trim();
+    if (!trimmedText.startsWith('\\') || trimmedText.length < 8) {
+      return false;
+    }
+
+    const hasMathCommand =
+      /\\(?:frac|sqrt|sum|prod|int|boldsymbol|mathbf|mathop|operatorname|text|Vert|left|right|alpha|beta|gamma|eta|sigma|Phi|Delta)/.test(
+        trimmedText
+      );
+    if (!hasMathCommand) {
+      return false;
+    }
+
+    // Avoid treating ordinary escaped prose as a formula block.
+    return !containsCJK(trimmedText);
+  }
+
+  function hasOnlyMatchedMath(text: string, matches: MathMatch[]): boolean {
+    let remainingText = '';
+    let lastIndex = 0;
+
+    for (const match of matches) {
+      remainingText += text.slice(lastIndex, match.start);
+      lastIndex = match.end;
+    }
+    remainingText += text.slice(lastIndex);
+
+    return remainingText.trim().length === 0;
+  }
+
+  function shouldSkipMathContainer(element: HTMLElement): boolean {
+    return (
+      !!element.closest('pre, code, script, style, .katex, .katex-display, .katex-inline') ||
+      !!element.querySelector(
+        'a, pre, code, script, style, table, img, video, audio, iframe, canvas, button, input, textarea'
+      )
+    );
+  }
+
+  function isSimpleMathContainer(element: HTMLElement): boolean {
+    return Array.from(element.children).every((child) => {
+      if (!simpleInlineTags.has(child.tagName)) return false;
+      return !child.querySelector(
+        'a, pre, code, script, style, table, img, video, audio, iframe, canvas, button, input, textarea'
+      );
+    });
+  }
+
+  function replaceTextWithMathFragments(
+    target: Text | HTMLElement,
+    text: string,
+    matches: MathMatch[]
+  ) {
+    const fragments: (string | HTMLElement)[] = [];
+    let lastIndex = 0;
+
+    for (const { start, end, math, isDisplay, environment } of matches) {
+      if (start > lastIndex) {
+        fragments.push(text.substring(lastIndex, start));
+      }
+
+      try {
+        fragments.push(createMathElement(math, isDisplay, environment));
+      } catch (e) {
+        console.error('Error rendering math:', e, 'Content:', math);
+        fragments.push(text.substring(start, end));
+      }
+
+      lastIndex = end;
+    }
+
+    if (lastIndex < text.length) {
+      fragments.push(text.substring(lastIndex));
+    }
+
+    if (target instanceof Text) {
+      const parent = target.parentNode;
+      if (!parent) return;
+
+      for (const fragment of fragments) {
+        parent.insertBefore(
+          typeof fragment === 'string' ? document.createTextNode(fragment) : fragment,
+          target
+        );
+      }
+      parent.removeChild(target);
+      return;
+    }
+
+    target.replaceChildren(
+      ...fragments.map((fragment) =>
+        typeof fragment === 'string' ? document.createTextNode(fragment) : fragment
+      )
+    );
+  }
+
+  function renderStandaloneMathBlocks(container: HTMLElement) {
+    const candidates = Array.from(
+      container.querySelectorAll('p, div, li, td, th, figcaption, blockquote')
+    ) as HTMLElement[];
+
+    for (const element of candidates) {
+      if (shouldSkipMathContainer(element)) continue;
+
+      const text = element.textContent || '';
+      if (!text.includes('\\') && !text.includes('$')) continue;
+
+      const matches = getMathMatches(text.trim(), true);
+      const hasDisplayMath = matches.some((match) => match.isDisplay);
+      const shouldRewriteMixedDisplayMath =
+        hasDisplayMath && isSimpleMathContainer(element) && text.includes('\\');
+
+      if (
+        matches.length === 0 ||
+        (!hasOnlyMatchedMath(text.trim(), matches) && !shouldRewriteMixedDisplayMath)
+      ) {
+        continue;
+      }
+
+      replaceTextWithMathFragments(element, text.trim(), matches);
+    }
+  }
+
   /**
    * Render math formulas in the content
    * Supports multiple formats:
    * - Display math: $$...$$ or \[...\]
    * - Inline math: $...$ or \(...\)
+   * - LaTeX environments: \begin{equation}...\end{equation}, \begin{align}...\end{align}, etc.
    */
   function renderMathFormulas(container: HTMLElement) {
     if (!container) return;
 
     try {
+      renderStandaloneMathBlocks(container);
+
       // First, handle pre-existing math elements with class 'math' or 'MathJax'
       const existingMathElements = container.querySelectorAll(
         '.math, .MathJax, [data-math], script[type*="math"]'
@@ -110,13 +545,7 @@ export function useArticleRendering() {
             el.classList.contains('math-display') ||
             el.classList.contains('display') ||
             el.tagName === 'DIV';
-          const mathElement = document.createElement(isDisplay ? 'div' : 'span');
-          mathElement.className = isDisplay ? 'katex-display' : 'katex-inline';
-          katex.render(mathContent, mathElement, {
-            displayMode: isDisplay,
-            throwOnError: false,
-            strict: false,
-          });
+          const mathElement = createMathElement(mathContent, isDisplay);
           el.replaceWith(mathElement);
         } catch (e) {
           console.error('Error rendering existing math element:', e);
@@ -143,7 +572,12 @@ export function useArticleRendering() {
           }
           // Accept nodes that contain math delimiters
           const text = node.textContent || '';
-          if (text.includes('$') || text.includes('\\(') || text.includes('\\[')) {
+          if (
+            text.includes('$') ||
+            text.includes('\\(') ||
+            text.includes('\\[') ||
+            text.includes('\\begin{')
+          ) {
             return NodeFilter.FILTER_ACCEPT;
           }
           return NodeFilter.FILTER_REJECT;
@@ -161,101 +595,10 @@ export function useArticleRendering() {
         const text = node.textContent || '';
         if (!text) continue;
 
-        const fragments: (string | HTMLElement)[] = [];
-        let lastIndex = 0;
+        const allMatches = getMathMatches(text);
 
-        // Match all math patterns
-        // Order matters: longer/more specific patterns first
-        const mathPatterns = [
-          // Display math: $$...$$ (must not be empty)
-          { regex: /\$\$([^$]+)\$\$/g, isDisplay: true },
-          // Display math: \[...\]
-          { regex: /\\\[([^\]]+)\\\]/g, isDisplay: true },
-          // Inline math: \(...\)
-          { regex: /\\\(([^)]+)\\\)/g, isDisplay: false },
-          // Inline math: $...$ (single line, not empty, not starting/ending with space)
-          { regex: /\$([^\s$][^$\n]*[^\s$]|\S)\$/g, isDisplay: false },
-        ];
-
-        // Collect all matches with their positions
-        const allMatches: Array<{
-          start: number;
-          end: number;
-          math: string;
-          isDisplay: boolean;
-        }> = [];
-
-        for (const { regex, isDisplay } of mathPatterns) {
-          let match;
-          regex.lastIndex = 0; // Reset regex state
-          while ((match = regex.exec(text)) !== null) {
-            // Check if this position is already covered by another match
-            const isOverlapping = allMatches.some(
-              (m) =>
-                (match!.index >= m.start && match!.index < m.end) ||
-                (match!.index + match![0].length > m.start &&
-                  match!.index + match![0].length <= m.end)
-            );
-            if (!isOverlapping) {
-              allMatches.push({
-                start: match.index,
-                end: match.index + match[0].length,
-                math: match[1],
-                isDisplay,
-              });
-            }
-          }
-        }
-
-        // Sort matches by position
-        allMatches.sort((a, b) => a.start - b.start);
-
-        // Build fragments
-        for (const { start, end, math, isDisplay } of allMatches) {
-          // Add text before match
-          if (start > lastIndex) {
-            fragments.push(text.substring(lastIndex, start));
-          }
-
-          // Render math
-          try {
-            const mathElement = document.createElement(isDisplay ? 'div' : 'span');
-            mathElement.className = isDisplay ? 'katex-display' : 'katex-inline';
-            katex.render(math.trim(), mathElement, {
-              displayMode: isDisplay,
-              throwOnError: false,
-              strict: false,
-            });
-            fragments.push(mathElement);
-          } catch (e) {
-            console.error('Error rendering math:', e, 'Content:', math);
-            // On error, keep the original text
-            fragments.push(text.substring(start, end));
-          }
-
-          lastIndex = end;
-        }
-
-        // Add remaining text
-        if (lastIndex < text.length) {
-          fragments.push(text.substring(lastIndex));
-        }
-
-        // Only replace if we found any math
-        if (fragments.length > 0 && allMatches.length > 0) {
-          const parent = node.parentNode;
-          if (parent) {
-            // Insert fragments
-            for (const fragment of fragments) {
-              if (typeof fragment === 'string') {
-                parent.insertBefore(document.createTextNode(fragment), node);
-              } else {
-                parent.insertBefore(fragment, node);
-              }
-            }
-            // Remove original text node
-            parent.removeChild(node);
-          }
+        if (allMatches.length > 0) {
+          replaceTextWithMathFragments(node, text, allMatches);
         }
       }
     } catch (e) {
