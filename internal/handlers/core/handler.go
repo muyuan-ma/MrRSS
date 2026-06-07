@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +38,14 @@ const (
 	SingleFeedDiscoveryTimeout = 90 * time.Second
 	// BatchDiscoveryTimeout is the timeout for discovering feeds from all sources
 	BatchDiscoveryTimeout = 5 * time.Minute
+)
+
+const (
+	fullArticleFetchTimeout  = 30 * time.Second
+	maxFullArticleHTMLBytes  = 10 * 1024 * 1024
+	fullArticleBrowserUA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	fullArticleAcceptHeader  = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+	fullArticleLanguagePrefs = "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
 )
 
 // DiscoveryState represents the current state of a discovery operation
@@ -180,9 +192,24 @@ func (h *Handler) GetArticleContent(articleID int64) (string, bool, error) {
 }
 
 // FetchFullArticleContent fetches the full article content from the original URL using readability.
-func (h *Handler) FetchFullArticleContent(url string) (string, error) {
-	// Use FromURL which handles the HTTP request internally
-	article, err := readability.FromURL(url, 30*time.Second)
+func (h *Handler) FetchFullArticleContent(articleURL string) (string, error) {
+	pageURL, err := url.Parse(articleURL)
+	if err != nil {
+		return "", fmt.Errorf("parse article URL: %w", err)
+	}
+	if pageURL.Scheme != "http" && pageURL.Scheme != "https" {
+		return "", fmt.Errorf("unsupported article URL scheme: %s", pageURL.Scheme)
+	}
+
+	htmlBody, finalURL, err := fetchFullArticleHTML(articleURL)
+	if err != nil {
+		return "", err
+	}
+	if finalURL == nil {
+		finalURL = pageURL
+	}
+
+	article, err := readability.FromReader(bytes.NewReader(htmlBody), finalURL)
 	if err != nil {
 		return "", fmt.Errorf("readability parse: %w", err)
 	}
@@ -195,6 +222,92 @@ func (h *Handler) FetchFullArticleContent(url string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+func fetchFullArticleHTML(articleURL string) ([]byte, *url.URL, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create cookie jar: %w", err)
+	}
+
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: fullArticleFetchTimeout,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), fullArticleFetchTimeout)
+	defer cancel()
+
+	resp, err := doFullArticleRequest(ctx, client, articleURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode == http.StatusForbidden && len(resp.Cookies()) > 0 {
+		resp.Body.Close()
+
+		resp, err = doFullArticleRequest(ctx, client, articleURL)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, nil, fmt.Errorf("fetch article HTML: unexpected status %s", resp.Status)
+	}
+
+	body, err := readLimitedFullArticleBody(resp.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return body, resp.Request.URL, nil
+}
+
+func doFullArticleRequest(ctx context.Context, client *http.Client, articleURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, articleURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create article request: %w", err)
+	}
+	setFullArticleRequestHeaders(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch article HTML: %w", err)
+	}
+
+	return resp, nil
+}
+
+func setFullArticleRequestHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", fullArticleBrowserUA)
+	req.Header.Set("Accept", fullArticleAcceptHeader)
+	req.Header.Set("Accept-Language", fullArticleLanguagePrefs)
+	req.Header.Set("Cache-Control", "max-age=0")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+
+	if req.URL != nil {
+		referer := (&url.URL{Scheme: req.URL.Scheme, Host: req.URL.Host, Path: "/"}).String()
+		req.Header.Set("Referer", referer)
+	}
+}
+
+func readLimitedFullArticleBody(body io.Reader) ([]byte, error) {
+	limited := io.LimitReader(body, maxFullArticleHTMLBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read article HTML: %w", err)
+	}
+	if len(data) > maxFullArticleHTMLBytes {
+		return nil, fmt.Errorf("article HTML exceeds %d bytes", maxFullArticleHTMLBytes)
+	}
+	return data, nil
 }
 
 // findMatchingFeedItem finds the best matching feed item for an article using multiple criteria
