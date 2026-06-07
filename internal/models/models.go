@@ -105,3 +105,32 @@ type AIProfile struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
+
+// DailyDigest is an AI-generated daily briefing for newly collected articles.
+type DailyDigest struct {
+	ID             int64                `json:"id"`
+	DigestDate     string               `json:"digest_date"`
+	Title          string               `json:"title"`
+	Content        string               `json:"content"`
+	ArticleCount   int                  `json:"article_count"`
+	Model          string               `json:"model"`
+	MemorySnapshot string               `json:"memory_snapshot"`
+	GeneratedAt    time.Time            `json:"generated_at"`
+	NotifiedAt     *time.Time           `json:"notified_at,omitempty"`
+	Articles       []DailyDigestArticle `json:"articles,omitempty"`
+}
+
+// DailyDigestArticle stores the per-article summary used by a daily briefing.
+type DailyDigestArticle struct {
+	ID             int64     `json:"id"`
+	DigestID       int64     `json:"digest_id"`
+	ArticleID      int64     `json:"article_id"`
+	Title          string    `json:"title"`
+	URL            string    `json:"url"`
+	FeedTitle      string    `json:"feed_title"`
+	PublishedAt    time.Time `json:"published_at"`
+	Summary        string    `json:"summary"`
+	Recommendation string    `json:"recommendation"`
+	RelevanceScore int       `json:"relevance_score"`
+	CreatedAt      time.Time `json:"created_at"`
+}

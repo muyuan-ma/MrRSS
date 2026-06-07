@@ -5,6 +5,7 @@ import Sidebar from './components/sidebar/Sidebar.vue';
 import ArticleList from './components/article/ArticleList.vue';
 import ArticleDetail from './components/article/ArticleDetail.vue';
 import ImageGalleryView from './components/article/imageGallery/index.vue';
+import DailyDigestView from './components/digest/DailyDigestView.vue';
 import AddFeedModal from './components/modals/feed/AddFeedModal.vue';
 import EditFeedModal from './components/modals/feed/EditFeedModal.vue';
 import SettingsModal from './components/modals/SettingsModal.vue';
@@ -15,7 +16,7 @@ import ConfirmDialog from './components/modals/common/ConfirmDialog.vue';
 import InputDialog from './components/modals/common/InputDialog.vue';
 import MultiSelectDialog from './components/modals/common/MultiSelectDialog.vue';
 import Toast from './components/common/Toast.vue';
-import { onMounted, ref, computed } from 'vue';
+import { onMounted, onUnmounted, ref, computed } from 'vue';
 import { useNotifications } from './composables/ui/useNotifications';
 import { useKeyboardShortcuts } from './composables/ui/useKeyboardShortcuts';
 import { useContextMenu } from './composables/ui/useContextMenu';
@@ -37,6 +38,9 @@ const isSidebarOpen = ref(true);
 
 // Check if we're in image gallery mode
 const isImageGalleryMode = computed(() => store.currentFilter === 'imageGallery');
+
+// Check if we're in daily digest mode
+const isDailyDigestMode = computed(() => store.currentFilter === 'dailyDigest');
 
 // Check if we're in card mode
 const isCardMode = ref(false);
@@ -73,6 +77,7 @@ const {
 
 // Update dialog state
 const showUpdateDialog = ref(false);
+let digestNotificationInterval: ReturnType<typeof setInterval> | null = null;
 
 // Initialize window state management
 const windowState = useWindowState();
@@ -98,6 +103,8 @@ onMounted(async () => {
 
   // Initialize theme system immediately (lightweight)
   store.initTheme();
+  checkDailyDigestNotification();
+  digestNotificationInterval = setInterval(checkDailyDigestNotification, 5 * 60 * 1000);
 
   // Load remaining settings (theme and other settings are already loaded in main.ts)
   let updateInterval = 10;
@@ -213,6 +220,13 @@ onMounted(async () => {
   }, 100);
 });
 
+onUnmounted(() => {
+  if (digestNotificationInterval) {
+    clearInterval(digestNotificationInterval);
+    digestNotificationInterval = null;
+  }
+});
+
 // Listen for events from Sidebar (moved outside onMounted to ensure proper capture)
 window.addEventListener('show-add-feed', () => {
   showAddFeed.value = true;
@@ -266,6 +280,28 @@ function shouldTriggerRefresh(lastUpdate: string, intervalMinutes: number): bool
   }
 }
 
+async function checkDailyDigestNotification(): Promise<void> {
+  try {
+    const response = await fetch('/api/agent/digest/latest');
+    if (!response.ok) return;
+
+    const digest = await response.json();
+    if (!digest || digest.digest === null || digest.notified_at) {
+      return;
+    }
+
+    window.showToast(`每日 AI 简报已生成：${digest.article_count || 0} 篇文章`, 'info', 8000);
+
+    await fetch('/api/agent/digest/notified', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: digest.id }),
+    });
+  } catch (error) {
+    console.error('Error checking daily digest notification:', error);
+  }
+}
+
 function toggleSidebar(): void {
   isSidebarOpen.value = !isSidebarOpen.value;
 }
@@ -293,8 +329,13 @@ function onFeedUpdated(): void {
   >
     <Sidebar :is-open="isSidebarOpen" @toggle="toggleSidebar" />
 
+    <!-- Show DailyDigestView when in daily digest mode -->
+    <template v-if="isDailyDigestMode">
+      <DailyDigestView :is-sidebar-open="isSidebarOpen" @toggle-sidebar="toggleSidebar" />
+    </template>
+
     <!-- Show ImageGalleryView when in image gallery mode -->
-    <template v-if="isImageGalleryMode">
+    <template v-else-if="isImageGalleryMode">
       <ImageGalleryView :is-sidebar-open="isSidebarOpen" @toggle-sidebar="toggleSidebar" />
     </template>
 

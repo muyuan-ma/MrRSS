@@ -83,6 +83,33 @@ export interface UnreadCounts {
   feedCounts: Record<number, number>;
 }
 
+export interface DailyDigestArticle {
+  id: number;
+  digest_id: number;
+  article_id: number;
+  title: string;
+  url: string;
+  feed_title: string;
+  published_at: string;
+  summary: string;
+  recommendation: string;
+  relevance_score: number;
+  created_at: string;
+}
+
+export interface DailyDigest {
+  id: number;
+  digest_date: string;
+  title: string;
+  content: string;
+  article_count: number;
+  model: string;
+  memory_snapshot: string;
+  generated_at: string;
+  notified_at?: string;
+  articles?: DailyDigestArticle[];
+}
+
 export interface RefreshProgress {
   isRunning: boolean;
   errors?: Record<number, string>; // Map of feed ID to error message

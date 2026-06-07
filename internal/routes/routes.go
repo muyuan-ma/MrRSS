@@ -53,6 +53,7 @@ func RegisterAPIRoutesWithConfig(mux *http.ServeMux, h *core.Handler, cfg Config
 	registerFeedRoutes(mux, h)
 	registerArticleRoutes(mux, h)
 	registerAIRoutes(mux, h)
+	registerDigestRoutes(mux, h)
 	registerSettingsRoutes(mux, h)
 	registerOtherRoutes(mux, h)
 }

@@ -5,6 +5,12 @@
 // To add new settings, edit internal/config/settings_schema.json and run: go run tools/settings-generator/main.go
 
 export interface SettingsData {
+  agent_digest_enabled: boolean;
+  agent_digest_max_articles: number;
+  agent_digest_time: string;
+  agent_memory_dislikes: string;
+  agent_memory_interests: string;
+  agent_memory_notes: string;
   ai_api_key: string;
   ai_chat_enabled: boolean;
   ai_chat_profile_id: string;

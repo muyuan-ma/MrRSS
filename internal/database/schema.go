@@ -82,6 +82,32 @@ func initSchema(db *sql.DB) error {
 		FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
 	);
 
+	-- Daily AI digest tables for the agent-style reader workflow
+	CREATE TABLE IF NOT EXISTS daily_digests (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		digest_date TEXT NOT NULL UNIQUE,
+		title TEXT NOT NULL DEFAULT '',
+		content TEXT NOT NULL DEFAULT '',
+		article_count INTEGER NOT NULL DEFAULT 0,
+		model TEXT DEFAULT '',
+		memory_snapshot TEXT DEFAULT '',
+		generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		notified_at DATETIME
+	);
+
+	CREATE TABLE IF NOT EXISTS daily_digest_articles (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		digest_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		summary TEXT NOT NULL DEFAULT '',
+		recommendation TEXT NOT NULL DEFAULT '',
+		relevance_score INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(digest_id, article_id),
+		FOREIGN KEY(digest_id) REFERENCES daily_digests(id) ON DELETE CASCADE,
+		FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+	);
+
 	-- Create indexes for better query performance
 	CREATE INDEX IF NOT EXISTS idx_articles_feed_id ON articles(feed_id);
 	CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
@@ -111,6 +137,9 @@ func initSchema(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_chat_sessions_article_id ON chat_sessions(article_id);
 	CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions(updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
+	CREATE INDEX IF NOT EXISTS idx_daily_digests_date ON daily_digests(digest_date DESC);
+	CREATE INDEX IF NOT EXISTS idx_daily_digest_articles_digest_id ON daily_digest_articles(digest_id);
+	CREATE INDEX IF NOT EXISTS idx_daily_digest_articles_article_id ON daily_digest_articles(article_id);
 	`
 	_, err := db.Exec(query)
 	if err != nil {

@@ -6,6 +6,7 @@ import {
   PhStar,
   PhClockCountdown,
   PhImages,
+  PhNewspaper,
   PhPlus,
   PhGear,
   PhTextOutdent,
@@ -41,7 +42,7 @@ interface NavItem {
   icon: any;
   label: string;
   activeIcon?: any;
-  filterType: 'all' | 'unread' | 'favorites' | 'readLater' | 'imageGallery';
+  filterType: 'all' | 'unread' | 'favorites' | 'readLater' | 'imageGallery' | 'dailyDigest';
 }
 
 const navItems: NavItem[] = [
@@ -57,6 +58,12 @@ const navItems: NavItem[] = [
     icon: PhTray,
     label: t('sidebar.feedList.unread'),
     filterType: 'unread',
+  },
+  {
+    id: 'dailyDigest',
+    icon: PhNewspaper,
+    label: '每日简报',
+    filterType: 'dailyDigest',
   },
   {
     id: 'favorites',
@@ -206,7 +213,7 @@ defineExpose({
 
       <!-- Navigation Items -->
       <div
-        class="flex-1 flex flex-col items-center gap-1 w-full overflow-y-auto overflow-x-hidden nav-items-container"
+        class="flex-1 flex flex-col items-center gap-1 w-full nav-items-container"
       >
         <TransitionGroup name="nav-item">
           <button
@@ -214,11 +221,12 @@ defineExpose({
             v-show="item.id !== 'imageGallery' || imageGalleryEnabled"
             :key="item.id"
             :class="[
-              'relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent',
+              'activity-btn relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent',
               store.currentFilter === item.filterType ? 'text-accent' : '',
             ]"
             style="width: 44px; height: 44px"
-            :title="item.label"
+            :aria-label="item.label"
+            :data-tooltip="item.label"
             @click="handleNavClick(item)"
           >
             <!-- Icon -->
@@ -249,9 +257,10 @@ defineExpose({
       <!-- Bottom Actions -->
       <div class="flex flex-col items-center gap-1 mt-auto w-full">
         <button
-          class="relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
+          class="activity-btn relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
           style="width: 44px; height: 44px"
-          :title="t('sidebar.activity.addFeed')"
+          :aria-label="t('sidebar.activity.addFeed')"
+          :data-tooltip="t('sidebar.activity.addFeed')"
           @click="emit('add-feed')"
         >
           <PhPlus :size="24" weight="regular" class="transition-all" />
@@ -259,9 +268,14 @@ defineExpose({
 
         <!-- Feed List Button -->
         <button
-          class="relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
+          class="activity-btn relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
           style="width: 44px; height: 44px"
-          :title="
+          :aria-label="
+            isFeedListExpanded
+              ? t('sidebar.activity.collapseFeedList')
+              : t('sidebar.activity.expandFeedList')
+          "
+          :data-tooltip="
             isFeedListExpanded
               ? t('sidebar.activity.collapseFeedList')
               : t('sidebar.activity.expandFeedList')
@@ -272,9 +286,10 @@ defineExpose({
         </button>
 
         <button
-          class="relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
+          class="activity-btn relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
           style="width: 44px; height: 44px"
-          :title="t('setting.tab.settings')"
+          :aria-label="t('setting.tab.settings')"
+          :data-tooltip="t('setting.tab.settings')"
           @click="emit('settings')"
         >
           <PhGear :size="24" weight="regular" class="transition-all" />
@@ -285,9 +300,10 @@ defineExpose({
 
         <!-- Collapse Button (at the bottom) -->
         <button
-          class="relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
+          class="activity-btn relative flex items-center justify-center text-text-secondary flex-shrink-0 transition-all hover:text-accent"
           style="width: 44px; height: 44px"
-          :title="t('sidebar.activity.collapseActivityBar')"
+          :aria-label="t('sidebar.activity.collapseActivityBar')"
+          :data-tooltip="t('sidebar.activity.collapseActivityBar')"
           @click="emit('toggle-activity-bar')"
         >
           <PhTextOutdent :size="24" weight="regular" class="transition-all" />
@@ -385,6 +401,34 @@ defineExpose({
     color 0.2s ease,
     background-color 0.2s ease;
   will-change: color, background-color;
+}
+
+.activity-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-2px);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: var(--color-bg-primary);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 80ms ease,
+    transform 80ms ease;
+  z-index: 120;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
+}
+
+.activity-btn[data-tooltip]:hover::after,
+.activity-btn[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
 }
 
 /* Smaller screens (laptops, tablets) */

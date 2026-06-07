@@ -73,6 +73,34 @@ func runMigrations(db *sql.DB) error {
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at ON chat_sessions(updated_at DESC)`)
 	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id)`)
 
+	// Migration: Add daily AI digest tables for agent-style briefings
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS daily_digests (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		digest_date TEXT NOT NULL UNIQUE,
+		title TEXT NOT NULL DEFAULT '',
+		content TEXT NOT NULL DEFAULT '',
+		article_count INTEGER NOT NULL DEFAULT 0,
+		model TEXT DEFAULT '',
+		memory_snapshot TEXT DEFAULT '',
+		generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		notified_at DATETIME
+	)`)
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS daily_digest_articles (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		digest_id INTEGER NOT NULL,
+		article_id INTEGER NOT NULL,
+		summary TEXT NOT NULL DEFAULT '',
+		recommendation TEXT NOT NULL DEFAULT '',
+		relevance_score INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(digest_id, article_id),
+		FOREIGN KEY(digest_id) REFERENCES daily_digests(id) ON DELETE CASCADE,
+		FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE
+	)`)
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_digests_date ON daily_digests(digest_date DESC)`)
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_digest_articles_digest_id ON daily_digest_articles(digest_id)`)
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_digest_articles_article_id ON daily_digest_articles(article_id)`)
+
 	// Migration: Add newsletter/email support fields to feeds table
 	_, _ = db.Exec(`ALTER TABLE feeds ADD COLUMN email_address TEXT DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE feeds ADD COLUMN email_imap_server TEXT DEFAULT ''`)

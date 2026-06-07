@@ -116,7 +116,8 @@ function toggleActivityBar() {
         <button
           v-if="isActivityBarCollapsed"
           class="edge-toggle-button flex items-center justify-center text-text-secondary hover:text-accent hover:bg-bg-secondary transition-all"
-          :title="t('sidebar.activity.expandActivityBar')"
+          :aria-label="t('sidebar.activity.expandActivityBar')"
+          :data-tooltip="t('sidebar.activity.expandActivityBar')"
           @click="toggleActivityBar"
         >
           <PhCaretRight :size="20" weight="regular" />
@@ -214,6 +215,34 @@ function toggleActivityBar() {
 
 .edge-toggle-button:hover {
   background-color: var(--color-bg-tertiary);
+}
+
+.edge-toggle-button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-2px);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-text-primary);
+  color: var(--color-bg-primary);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 80ms ease,
+    transform 80ms ease;
+  z-index: 120;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18);
+}
+
+.edge-toggle-button[data-tooltip]:hover::after,
+.edge-toggle-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
 }
 
 /* Edge toggle fade transition - faster than container width change */

@@ -212,3 +212,22 @@ func (s *AISummarizer) Summarize(text string, length SummaryLength) (SummaryResu
 		IsTooShort:    false,
 	}, nil
 }
+
+// Complete sends a custom prompt to the configured AI client.
+func (s *AISummarizer) Complete(systemPrompt, userPrompt string) (SummaryResult, error) {
+	result, err := s.client.RequestWithThinking(systemPrompt, userPrompt)
+	if err != nil {
+		return SummaryResult{}, err
+	}
+
+	thinking := ai.ExtractThinking(result.Content)
+	content := strings.TrimSpace(ai.RemoveThinkingTags(result.Content))
+	sentences := splitSentences(content)
+
+	return SummaryResult{
+		Summary:       content,
+		Thinking:      thinking,
+		SentenceCount: len(sentences),
+		IsTooShort:    false,
+	}, nil
+}

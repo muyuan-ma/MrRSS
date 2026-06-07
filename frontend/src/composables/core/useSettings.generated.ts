@@ -13,6 +13,12 @@ import { settingsDefaults } from '@/config/defaults';
  */
 export function generateInitialSettings(): SettingsData {
   return {
+    agent_digest_enabled: settingsDefaults.agent_digest_enabled,
+    agent_digest_max_articles: settingsDefaults.agent_digest_max_articles,
+    agent_digest_time: settingsDefaults.agent_digest_time,
+    agent_memory_dislikes: settingsDefaults.agent_memory_dislikes,
+    agent_memory_interests: settingsDefaults.agent_memory_interests,
+    agent_memory_notes: settingsDefaults.agent_memory_notes,
     ai_api_key: settingsDefaults.ai_api_key,
     ai_chat_enabled: settingsDefaults.ai_chat_enabled,
     ai_chat_profile_id: settingsDefaults.ai_chat_profile_id,
@@ -133,6 +139,12 @@ export function generateInitialSettings(): SettingsData {
  */
 export function parseSettingsData(data: Record<string, string>): SettingsData {
   return {
+    agent_digest_enabled: data.agent_digest_enabled === 'true',
+    agent_digest_max_articles: parseInt(data.agent_digest_max_articles) || settingsDefaults.agent_digest_max_articles,
+    agent_digest_time: data.agent_digest_time || settingsDefaults.agent_digest_time,
+    agent_memory_dislikes: data.agent_memory_dislikes || settingsDefaults.agent_memory_dislikes,
+    agent_memory_interests: data.agent_memory_interests || settingsDefaults.agent_memory_interests,
+    agent_memory_notes: data.agent_memory_notes || settingsDefaults.agent_memory_notes,
     ai_api_key: data.ai_api_key || settingsDefaults.ai_api_key,
     ai_chat_enabled: data.ai_chat_enabled === 'true',
     ai_chat_profile_id: data.ai_chat_profile_id || settingsDefaults.ai_chat_profile_id,
@@ -253,6 +265,12 @@ export function parseSettingsData(data: Record<string, string>): SettingsData {
  */
 export function buildAutoSavePayload(settingsRef: Ref<SettingsData>): Record<string, string> {
   return {
+    agent_digest_enabled: (settingsRef.value.agent_digest_enabled ?? settingsDefaults.agent_digest_enabled).toString(),
+    agent_digest_max_articles: (settingsRef.value.agent_digest_max_articles ?? settingsDefaults.agent_digest_max_articles).toString(),
+    agent_digest_time: settingsRef.value.agent_digest_time ?? settingsDefaults.agent_digest_time,
+    agent_memory_dislikes: settingsRef.value.agent_memory_dislikes ?? settingsDefaults.agent_memory_dislikes,
+    agent_memory_interests: settingsRef.value.agent_memory_interests ?? settingsDefaults.agent_memory_interests,
+    agent_memory_notes: settingsRef.value.agent_memory_notes ?? settingsDefaults.agent_memory_notes,
     ai_api_key: settingsRef.value.ai_api_key ?? settingsDefaults.ai_api_key,
     ai_chat_enabled: (settingsRef.value.ai_chat_enabled ?? settingsDefaults.ai_chat_enabled).toString(),
     ai_chat_profile_id: settingsRef.value.ai_chat_profile_id ?? settingsDefaults.ai_chat_profile_id,

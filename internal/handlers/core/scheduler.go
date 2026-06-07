@@ -35,6 +35,8 @@ func (h *Handler) StartBackgroundScheduler(ctx context.Context) {
 		}
 	}()
 
+	go h.startDailyDigestScheduler(ctx)
+
 	// Start the scheduler based on refresh mode
 	refreshMode, _ := h.DB.GetSetting("refresh_mode")
 

@@ -7,6 +7,7 @@ import { TipBox } from '@/components/settings';
 import AIProfileList from './AIProfileList.vue';
 import AIUsageSettings from './AIUsageSettings.vue';
 import AIFeatureSettings from './AIFeatureSettings.vue';
+import AgentDigestSettings from './AgentDigestSettings.vue';
 
 const { t } = useI18n();
 
@@ -38,6 +39,7 @@ function handleUpdateSettings(updatedSettings: SettingsData) {
     <AIProfileList />
     <AIUsageSettings :settings="settings" @update:settings="handleUpdateSettings" />
     <AIFeatureSettings :settings="settings" @update:settings="handleUpdateSettings" />
+    <AgentDigestSettings :settings="settings" @update:settings="handleUpdateSettings" />
   </div>
 </template>
 

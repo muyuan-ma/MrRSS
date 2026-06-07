@@ -305,6 +305,48 @@
       "encrypted": false,
       "frontend_key": "aiSearchEnabled"
     },
+    "agent_digest_enabled": {
+      "type": "bool",
+      "default": false,
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentDigestEnabled"
+    },
+    "agent_digest_time": {
+      "type": "string",
+      "default": "08:30",
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentDigestTime"
+    },
+    "agent_digest_max_articles": {
+      "type": "int",
+      "default": 20,
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentDigestMaxArticles"
+    },
+    "agent_memory_interests": {
+      "type": "string",
+      "default": "",
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentMemoryInterests"
+    },
+    "agent_memory_dislikes": {
+      "type": "string",
+      "default": "",
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentMemoryDislikes"
+    },
+    "agent_memory_notes": {
+      "type": "string",
+      "default": "",
+      "category": "ai",
+      "encrypted": false,
+      "frontend_key": "agentMemoryNotes"
+    },
     "summary_enabled": {
       "type": "bool",
       "default": true,

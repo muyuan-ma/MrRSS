@@ -4,7 +4,14 @@ import type { Article, Feed, Tag, UnreadCounts, RefreshProgress } from '@/types/
 import type { FilterCondition } from '@/types/filter';
 import { useSettings } from '@/composables/core/useSettings';
 
-export type Filter = 'all' | 'unread' | 'favorites' | 'readLater' | 'imageGallery' | '';
+export type Filter =
+  | 'all'
+  | 'unread'
+  | 'favorites'
+  | 'readLater'
+  | 'imageGallery'
+  | 'dailyDigest'
+  | '';
 export type ThemePreference = 'light' | 'dark' | 'auto';
 export type Theme = 'light' | 'dark';
 
@@ -113,6 +120,15 @@ export const useAppStore = defineStore('app', () => {
     currentFeedId.value = null;
     currentCategory.value = null;
     tempSelection.value = { feedId: null, category: null };
+
+    if (filter === 'dailyDigest') {
+      articles.value = [];
+      currentArticleId.value = null;
+      page.value = 1;
+      hasMore.value = false;
+      return;
+    }
+
     // Refresh filter counts to ensure sidebar shows correct feeds
     await fetchFilterCounts();
     // Clear and reset will be handled by fetchArticles
@@ -172,6 +188,7 @@ export const useAppStore = defineStore('app', () => {
 
   async function fetchArticles(append: boolean = false): Promise<void> {
     if (isLoading.value) return;
+    if (currentFilter.value === 'dailyDigest') return;
 
     // If not appending, reset to page 1 and clear articles
     if (!append) {

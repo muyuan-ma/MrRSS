@@ -1,4 +1,10 @@
 {
+  "agent_digest_enabled": false,
+  "agent_digest_max_articles": 20,
+  "agent_digest_time": "08:30",
+  "agent_memory_dislikes": "",
+  "agent_memory_interests": "",
+  "agent_memory_notes": "",
   "ai_api_key": "",
   "ai_chat_enabled": false,
   "ai_chat_profile_id": "",
