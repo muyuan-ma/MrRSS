@@ -14,6 +14,7 @@ import {
   PhCircle,
   PhClock,
   PhLightning,
+  PhStopCircle,
   PhTranslate,
 } from '@phosphor-icons/vue';
 import ArticleFilterModal from '../modals/filter/ArticleFilterModal.vue';
@@ -40,8 +41,10 @@ const defaultViewMode = ref<'original' | 'rendered' | 'external'>('original');
 const showFilterModal = ref(false);
 const isRefreshing = ref(false);
 const isBatchTranslatingTitles = ref(false);
+const isStoppingBatchTitleTranslation = ref(false);
 const batchTitleTranslationDone = ref(0);
 const batchTitleTranslationTotal = ref(0);
+const batchTitleTranslationAbortController = ref<AbortController | null>(null);
 const savedScrollTop = ref(0);
 const showRefreshTooltip = ref(false);
 // Track articles that should be temporarily kept in list even if read
@@ -324,6 +327,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('settings-loaded', onSettingsLoaded as EventListener);
   window.removeEventListener('refresh-articles', onRefreshArticles);
   window.removeEventListener('toggle-filter', onToggleFilter);
+  stopBatchTitleTranslation();
 });
 
 interface CustomEventDetail {
@@ -602,6 +606,12 @@ async function readApiError(res: Response): Promise<string> {
   }
 }
 
+function stopBatchTitleTranslation(): void {
+  if (!isBatchTranslatingTitles.value) return;
+  isStoppingBatchTitleTranslation.value = true;
+  batchTitleTranslationAbortController.value?.abort();
+}
+
 async function translateCurrentListTitles(): Promise<void> {
   if (isBatchTranslatingTitles.value || !canBatchTranslateTitles.value) return;
 
@@ -628,14 +638,19 @@ async function translateCurrentListTitles(): Promise<void> {
   if (!confirmed) return;
 
   isBatchTranslatingTitles.value = true;
+  isStoppingBatchTitleTranslation.value = false;
   batchTitleTranslationDone.value = 0;
   batchTitleTranslationTotal.value = articlesToTranslate.length;
+  batchTitleTranslationAbortController.value = new AbortController();
 
   try {
     for (const article of articlesToTranslate) {
+      if (isStoppingBatchTitleTranslation.value) break;
+
       const res = await fetch('/api/articles/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: batchTitleTranslationAbortController.value.signal,
         body: JSON.stringify({
           article_id: article.id,
           title: article.title,
@@ -655,18 +670,39 @@ async function translateCurrentListTitles(): Promise<void> {
       batchTitleTranslationDone.value++;
     }
 
-    window.showToast(
-      t('article.translation.batchTranslateTitlesDone', {
-        count: batchTitleTranslationDone.value,
-      }),
-      'success'
-    );
+    if (isStoppingBatchTitleTranslation.value) {
+      window.showToast(
+        t('article.translation.batchTranslateTitlesStopped', {
+          count: batchTitleTranslationDone.value,
+        }),
+        'info'
+      );
+    } else {
+      window.showToast(
+        t('article.translation.batchTranslateTitlesDone', {
+          count: batchTitleTranslationDone.value,
+        }),
+        'success'
+      );
+    }
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      window.showToast(
+        t('article.translation.batchTranslateTitlesStopped', {
+          count: batchTitleTranslationDone.value,
+        }),
+        'info'
+      );
+      return;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     window.showToast(t('article.translation.batchTranslateTitlesFailed', { message }), 'error');
   } finally {
     isBatchTranslatingTitles.value = false;
+    isStoppingBatchTitleTranslation.value = false;
     batchTitleTranslationTotal.value = 0;
+    batchTitleTranslationAbortController.value = null;
   }
 }
 
@@ -869,16 +905,25 @@ async function markAllVisibleAsRead(): Promise<void> {
           </button>
           <div v-if="canBatchTranslateTitles" class="relative">
             <button
-              class="text-text-secondary hover:text-text-primary hover:bg-bg-tertiary p-1 sm:p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              :title="t('article.translation.batchTranslateTitles')"
-              :disabled="isBatchTranslatingTitles"
-              @click="translateCurrentListTitles"
+              class="text-text-secondary hover:text-text-primary hover:bg-bg-tertiary p-1 sm:p-1.5 rounded transition-colors"
+              :class="isBatchTranslatingTitles ? 'text-red-500 hover:text-red-600' : ''"
+              :title="
+                isBatchTranslatingTitles
+                  ? t('article.translation.stopBatchTranslateTitles')
+                  : t('article.translation.batchTranslateTitles')
+              "
+              @click="
+                isBatchTranslatingTitles
+                  ? stopBatchTitleTranslation()
+                  : translateCurrentListTitles()
+              "
             >
               <PhSpinner
-                v-if="isBatchTranslatingTitles"
+                v-if="isBatchTranslatingTitles && isStoppingBatchTitleTranslation"
                 :size="18"
                 class="sm:w-5 sm:h-5 animate-spin"
               />
+              <PhStopCircle v-else-if="isBatchTranslatingTitles" :size="18" class="sm:w-5 sm:h-5" />
               <PhTranslate v-else :size="18" class="sm:w-5 sm:h-5" />
             </button>
             <div
