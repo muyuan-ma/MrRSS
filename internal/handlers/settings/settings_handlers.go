@@ -10,6 +10,10 @@ import (
 	"MrRSS/internal/handlers/response"
 )
 
+type translationCacheInvalidator interface {
+	InvalidateCache()
+}
+
 // safeGetEncryptedSetting safely retrieves an encrypted setting, returning empty string on error.
 // This prevents JSON encoding errors when encrypted data is corrupted or cannot be decrypted.
 func safeGetEncryptedSetting(h *core.Handler, key string) string {
@@ -64,6 +68,10 @@ func HandleSettings(h *core.Handler, w http.ResponseWriter, r *http.Request) {
 			log.Printf("Failed to save settings: %v", err)
 			response.Error(w, err, http.StatusInternalServerError)
 			return
+		}
+
+		if invalidator, ok := h.Translator.(translationCacheInvalidator); ok {
+			invalidator.InvalidateCache()
 		}
 
 		// Re-fetch all settings after save to return updated values

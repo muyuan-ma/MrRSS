@@ -8,6 +8,7 @@ import ArticleContent from './ArticleContent.vue';
 import ImageViewer from '../common/ImageViewer.vue';
 import FindInPage from '../common/FindInPage.vue';
 import type { Article } from '@/types/models';
+import type { TranslationDisplayMode } from '@/types/translation';
 import { openInBrowser } from '@/utils/browser';
 import { useSettings } from '@/composables/core/useSettings';
 
@@ -35,7 +36,7 @@ const { settings, fetchSettings } = useSettings();
 
 // View state
 const showContent = ref(true);
-const showTranslations = ref(true);
+const translationMode = ref<TranslationDisplayMode>('original');
 const showFindInPage = ref(false);
 
 // Image viewer state
@@ -166,16 +167,19 @@ onMounted(async () => {
     await fetchSettings();
     // Apply default view mode
     showContent.value = settings.value.default_view_mode === 'rendered';
+    translationMode.value = 'original';
   } catch (e) {
     console.error('Error loading settings:', e);
   }
 
   // Add keyboard listener
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('translation-settings-changed', handleTranslationSettingsChanged);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('translation-settings-changed', handleTranslationSettingsChanged);
 });
 
 // Watch for article changes
@@ -187,6 +191,7 @@ watch(
     imageViewerAlt.value = '';
     imageViewerImages.value = [];
     imageViewerInitialIndex.value = 0;
+    translationMode.value = 'original';
 
     // Apply default view mode for new article
     const feed = store.feeds.find((f) => f.id === props.article?.feed_id);
@@ -228,12 +233,19 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
+function handleTranslationSettingsChanged(event: Event) {
+  const customEvent = event as CustomEvent<{ enabled?: boolean }>;
+  if (customEvent.detail?.enabled === false) {
+    translationMode.value = 'original';
+  }
+}
+
 function toggleContentView() {
   showContent.value = !showContent.value;
 }
 
-function toggleTranslations() {
-  showTranslations.value = !showTranslations.value;
+function setTranslationMode(mode: TranslationDisplayMode) {
+  translationMode.value = mode;
 }
 
 function openOriginal() {
@@ -300,7 +312,7 @@ function handleOverlayClick(e: MouseEvent) {
         <ArticleToolbar
           :article="article"
           :show-content="showContent"
-          :show-translations="showTranslations"
+          :translation-mode="translationMode"
           :is-modal="true"
           @close="emit('close')"
           @toggle-content-view="toggleContentView"
@@ -308,7 +320,7 @@ function handleOverlayClick(e: MouseEvent) {
           @toggle-favorite="emit('toggleFavorite')"
           @toggle-read-later="emit('toggleReadLater')"
           @open-original="openOriginal"
-          @toggle-translations="toggleTranslations"
+          @set-translation-mode="setTranslationMode"
           @export-to-obsidian="exportToObsidian"
           @export-to-notion="exportToNotion"
           @export-to-zotero="exportToZotero"
@@ -333,7 +345,7 @@ function handleOverlayClick(e: MouseEvent) {
             :article-content="articleContent"
             :is-loading-content="isLoadingContent"
             :attach-image-event-listeners="attachImageEventListeners"
-            :show-translations="showTranslations"
+            :translation-mode="translationMode"
             :show-content="showContent"
             class="modal-prose-content"
             @retry-load-content="handleRetryLoadContent"

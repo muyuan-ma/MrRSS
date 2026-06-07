@@ -114,7 +114,7 @@ func (f *Factory) Create(providerType ProviderType) (Provider, error) {
 // createGoogleProvider 创建 Google 翻译提供商
 func (f *Factory) createGoogleProvider(config ProviderConfig) Provider {
 	return &googleProvider{
-		translator: NewGoogleFreeTranslator(),
+		translator: NewGoogleFreeTranslatorWithDB(f.settingsProvider),
 	}
 }
 
@@ -122,22 +122,22 @@ func (f *Factory) createGoogleProvider(config ProviderConfig) Provider {
 func (f *Factory) createDeepLProvider(config *deepLConfig) Provider {
 	var translator *DeepLTranslator
 	if config.Endpoint != "" {
-		translator = NewDeepLTranslatorWithEndpoint(config.APIKey, config.Endpoint)
+		translator = NewDeepLTranslatorWithEndpointAndDB(config.APIKey, config.Endpoint, f.settingsProvider)
 	} else {
-		translator = NewDeepLTranslator(config.APIKey)
+		translator = NewDeepLTranslatorWithDB(config.APIKey, f.settingsProvider)
 	}
 	return &deepLProvider{translator: translator}
 }
 
 // createBaiduProvider 创建百度翻译提供商
 func (f *Factory) createBaiduProvider(config *baiduConfig) Provider {
-	translator := NewBaiduTranslator(config.AppID, config.SecretKey)
+	translator := NewBaiduTranslatorWithDB(config.AppID, config.SecretKey, f.settingsProvider)
 	return &baiduProvider{translator: translator}
 }
 
 // createAIProvider 创建 AI 翻译提供商
 func (f *Factory) createAIProvider(config *aiConfig) Provider {
-	translator := NewAITranslator(config.APIKey, config.Endpoint, config.Model)
+	translator := NewAITranslatorWithDB(config.APIKey, config.Endpoint, config.Model, f.settingsProvider)
 	if config.SystemPrompt != "" {
 		translator.SetSystemPrompt(config.SystemPrompt)
 	}
@@ -356,11 +356,11 @@ func (f *Factory) createMicrosoftProvider(config *microsoftConfig) Provider {
 
 	// Create translator based on configuration
 	if config.Endpoint != "" {
-		translator = NewMicrosoftTranslatorWithEndpoint(config.APIKey, config.Endpoint)
+		translator = NewMicrosoftTranslatorWithAll(config.APIKey, config.Region, config.Endpoint, f.settingsProvider)
 	} else if config.Region != "" {
-		translator = NewMicrosoftTranslatorWithRegion(config.APIKey, config.Region)
+		translator = NewMicrosoftTranslatorWithAll(config.APIKey, config.Region, "", f.settingsProvider)
 	} else {
-		translator = NewMicrosoftTranslator(config.APIKey)
+		translator = NewMicrosoftTranslatorWithDB(config.APIKey, f.settingsProvider)
 	}
 
 	return &microsoftProvider{translator: translator}
@@ -372,9 +372,9 @@ func (f *Factory) createTencentProvider(config *tencentConfig) Provider {
 
 	// Create translator based on configuration
 	if config.Region != "" && config.Region != "ap-guangzhou" {
-		translator = NewTencentTranslatorWithRegion(config.SecretID, config.SecretKey, config.Region)
+		translator = NewTencentTranslatorWithAll(config.SecretID, config.SecretKey, config.Region, f.settingsProvider)
 	} else {
-		translator = NewTencentTranslator(config.SecretID, config.SecretKey)
+		translator = NewTencentTranslatorWithDB(config.SecretID, config.SecretKey, f.settingsProvider)
 	}
 
 	return &tencentProvider{translator: translator}

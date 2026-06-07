@@ -14,6 +14,7 @@ import {
   PhCircle,
   PhClock,
   PhLightning,
+  PhTranslate,
 } from '@phosphor-icons/vue';
 import ArticleFilterModal from '../modals/filter/ArticleFilterModal.vue';
 import ArticleItem from './ArticleItem.vue';
@@ -38,6 +39,9 @@ const listRef: Ref<HTMLDivElement | null> = ref(null);
 const defaultViewMode = ref<'original' | 'rendered' | 'external'>('original');
 const showFilterModal = ref(false);
 const isRefreshing = ref(false);
+const isBatchTranslatingTitles = ref(false);
+const batchTitleTranslationDone = ref(0);
+const batchTitleTranslationTotal = ref(0);
 const savedScrollTop = ref(0);
 const showRefreshTooltip = ref(false);
 // Track articles that should be temporarily kept in list even if read
@@ -57,6 +61,9 @@ const hasScrolledToBottom = ref(false);
 // Layout mode computed
 const layoutMode = computed(() => settings.value.layout_mode || 'normal');
 const isCardMode = computed(() => layoutMode.value === 'card');
+const canBatchTranslateTitles = computed(
+  () => settings.value.translation_enabled && settings.value.translate_titles_enabled
+);
 
 interface Props {
   isSidebarOpen?: boolean;
@@ -323,6 +330,7 @@ interface CustomEventDetail {
   mode?: string;
   enabled?: boolean;
   targetLang?: string;
+  translateTitlesEnabled?: boolean;
 }
 
 // Event handlers
@@ -335,7 +343,17 @@ function onDefaultViewModeChanged(e: Event): void {
 
 function onTranslationSettingsChanged(e: Event): void {
   const customEvent = e as CustomEvent<CustomEventDetail>;
-  const { enabled, targetLang } = customEvent.detail;
+  const { enabled, targetLang, translateTitlesEnabled } = customEvent.detail;
+  if (enabled !== undefined) {
+    settings.value.translation_enabled = enabled;
+  }
+  if (targetLang) {
+    settings.value.target_language = targetLang;
+  }
+  if (translateTitlesEnabled !== undefined) {
+    settings.value.translate_titles_enabled = translateTitlesEnabled;
+  }
+
   if (enabled !== undefined && targetLang) {
     handleTranslationSettingsChange(enabled, targetLang);
 
@@ -575,6 +593,83 @@ async function clearReadLater(): Promise<void> {
   }
 }
 
+async function readApiError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    return data?.error?.message || data?.message || res.statusText || `HTTP ${res.status}`;
+  } catch {
+    return res.statusText || `HTTP ${res.status}`;
+  }
+}
+
+async function translateCurrentListTitles(): Promise<void> {
+  if (isBatchTranslatingTitles.value || !canBatchTranslateTitles.value) return;
+
+  const articlesToTranslate = visibleArticles.value.filter(
+    (article) =>
+      article.title && (!article.translated_title || article.translated_title === article.title)
+  );
+
+  if (articlesToTranslate.length === 0) {
+    window.showToast(t('article.translation.noTitlesToTranslate'), 'info');
+    return;
+  }
+
+  const confirmed = await window.showConfirm({
+    title: t('article.translation.batchTranslateTitles'),
+    message: t('article.translation.batchTranslateTitlesConfirmMessage', {
+      count: articlesToTranslate.length,
+    }),
+    confirmText: t('common.confirm'),
+    cancelText: t('common.cancel'),
+    isDanger: false,
+  });
+
+  if (!confirmed) return;
+
+  isBatchTranslatingTitles.value = true;
+  batchTitleTranslationDone.value = 0;
+  batchTitleTranslationTotal.value = articlesToTranslate.length;
+
+  try {
+    for (const article of articlesToTranslate) {
+      const res = await fetch('/api/articles/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          article_id: article.id,
+          title: article.title,
+          target_language: settings.value.target_language || translationSettings.value.targetLang,
+          force: false,
+        }),
+      });
+
+      if (!res.ok) {
+        const message = await readApiError(res);
+        window.showToast(t('article.translation.batchTranslateTitlesFailed', { message }), 'error');
+        return;
+      }
+
+      const data = await res.json();
+      article.translated_title = data.translated_title || article.translated_title;
+      batchTitleTranslationDone.value++;
+    }
+
+    window.showToast(
+      t('article.translation.batchTranslateTitlesDone', {
+        count: batchTitleTranslationDone.value,
+      }),
+      'success'
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.showToast(t('article.translation.batchTranslateTitlesFailed', { message }), 'error');
+  } finally {
+    isBatchTranslatingTitles.value = false;
+    batchTitleTranslationTotal.value = 0;
+  }
+}
+
 // Handle hover mark as read event from ArticleItem
 function handleHoverMarkAsRead(articleId: number): void {
   // Find and update the article in the store
@@ -772,6 +867,27 @@ async function markAllVisibleAsRead(): Promise<void> {
           >
             <PhTrash :size="18" class="sm:w-5 sm:h-5" />
           </button>
+          <div v-if="canBatchTranslateTitles" class="relative">
+            <button
+              class="text-text-secondary hover:text-text-primary hover:bg-bg-tertiary p-1 sm:p-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              :title="t('article.translation.batchTranslateTitles')"
+              :disabled="isBatchTranslatingTitles"
+              @click="translateCurrentListTitles"
+            >
+              <PhSpinner
+                v-if="isBatchTranslatingTitles"
+                :size="18"
+                class="sm:w-5 sm:h-5 animate-spin"
+              />
+              <PhTranslate v-else :size="18" class="sm:w-5 sm:h-5" />
+            </button>
+            <div
+              v-if="isBatchTranslatingTitles && batchTitleTranslationTotal > 0"
+              class="absolute -top-1 -right-1 bg-accent text-white text-[9px] sm:text-[10px] font-bold rounded-full min-w-[14px] sm:min-w-[16px] h-3.5 sm:h-4 px-0.5 sm:px-1 flex items-center justify-center"
+            >
+              {{ batchTitleTranslationDone }}/{{ batchTitleTranslationTotal }}
+            </div>
+          </div>
           <button
             class="text-text-secondary hover:text-text-primary hover:bg-bg-tertiary p-1 sm:p-1.5 rounded transition-colors"
             :title="t('article.action.markAllRead')"

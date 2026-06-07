@@ -69,10 +69,17 @@
     },
     "translation_enabled": {
       "type": "bool",
-      "default": false,
+      "default": true,
       "category": "translation",
       "encrypted": false,
       "frontend_key": "translationEnabled"
+    },
+    "translate_titles_enabled": {
+      "type": "bool",
+      "default": false,
+      "category": "translation",
+      "encrypted": false,
+      "frontend_key": "translateTitlesEnabled"
     },
     "translation_only_mode": {
       "type": "bool",

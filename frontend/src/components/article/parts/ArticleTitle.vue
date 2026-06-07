@@ -2,19 +2,24 @@
 import { computed } from 'vue';
 import { PhSpinnerGap, PhTranslate, PhArrowsClockwise } from '@phosphor-icons/vue';
 import type { Article } from '@/types/models';
+import type { TranslationDisplayMode } from '@/types/translation';
 import { formatDate } from '@/utils/date';
 import { useI18n } from 'vue-i18n';
 
 interface Props {
   article: Article;
-  translatedTitle: string;
-  isTranslatingTitle: boolean;
+  translatedTitle?: string;
+  isTranslatingTitle?: boolean;
   translationEnabled: boolean;
+  translationMode?: TranslationDisplayMode;
   translationSkipped?: boolean;
   isTranslatingContent?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  translatedTitle: '',
+  isTranslatingTitle: false,
+  translationMode: 'original',
   translationSkipped: false,
   isTranslatingContent: false,
 });
@@ -31,39 +36,48 @@ const formatDateWithI18n = (dateStr: string): string => {
   return formatDate(dateStr, locale.value, t);
 };
 
-// Computed: check if we should show bilingual title
-const showBilingualTitle = computed(() => {
-  return (
-    props.translationEnabled &&
-    props.translatedTitle &&
-    props.translatedTitle !== props.article?.title
-  );
-});
-
 // Computed: translation status text
 const translationStatusText = computed(() => {
   if (props.translationSkipped) {
     return t('setting.content.translationSkippedAlreadyTarget');
   }
-  return t('common.toast.autoTranslateEnabled');
+  return t('article.translation.translateButton');
+});
+
+const hasTranslatedTitle = computed(
+  () =>
+    props.translationEnabled &&
+    props.translatedTitle &&
+    props.translatedTitle !== props.article.title
+);
+
+const primaryTitle = computed(() => {
+  if (props.translationMode !== 'original' && hasTranslatedTitle.value) {
+    return props.translatedTitle;
+  }
+  return props.article.title;
+});
+
+const secondaryTitle = computed(() => {
+  if (props.translationMode === 'bilingual' && hasTranslatedTitle.value) {
+    return props.article.title;
+  }
+  return '';
 });
 </script>
 
 <template>
-  <!-- Title Section - Bilingual when translation enabled -->
+  <!-- Title Section -->
   <div class="mb-3 sm:mb-4">
-    <!-- Original Title -->
     <h1 class="text-xl sm:text-3xl font-bold leading-tight text-text-primary select-text">
-      {{ article.title }}
+      {{ primaryTitle }}
     </h1>
-    <!-- Translated Title (shown below if different from original) -->
     <h2
-      v-if="showBilingualTitle"
+      v-if="secondaryTitle"
       class="text-base sm:text-xl font-medium leading-tight mt-2 text-text-secondary select-text"
     >
-      {{ translatedTitle }}
+      {{ secondaryTitle }}
     </h2>
-    <!-- Translation loading indicator for title -->
     <div v-if="isTranslatingTitle" class="flex items-center gap-1 mt-1 text-text-secondary">
       <PhSpinnerGap :size="12" class="animate-spin" />
       <span class="text-xs">Translating...</span>

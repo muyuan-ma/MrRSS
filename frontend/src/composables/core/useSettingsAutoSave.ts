@@ -23,10 +23,12 @@ export function useSettingsAutoSave(settings: Ref<SettingsData> | (() => Setting
     enabled: boolean;
     targetLang: string;
     provider: string;
+    translateTitlesEnabled: boolean;
   }> = ref({
     enabled: settingsDefaults.translation_enabled,
     targetLang: settingsDefaults.target_language,
     provider: settingsDefaults.translation_provider,
+    translateTitlesEnabled: settingsDefaults.translate_titles_enabled,
   });
 
   // Track previous article display settings to prevent unnecessary refreshes
@@ -61,6 +63,7 @@ export function useSettingsAutoSave(settings: Ref<SettingsData> | (() => Setting
         enabled: settingsRef.value.translation_enabled,
         targetLang: settingsRef.value.target_language,
         provider: settingsRef.value.translation_provider,
+        translateTitlesEnabled: settingsRef.value.translate_titles_enabled,
       };
       prevArticleDisplaySettings.value = {
         showHiddenArticles: settingsRef.value.show_hidden_articles,
@@ -92,6 +95,9 @@ export function useSettingsAutoSave(settings: Ref<SettingsData> | (() => Setting
         prevTranslationSettings.value.provider !== settingsRef.value.translation_provider ||
         (settingsRef.value.translation_enabled &&
           prevTranslationSettings.value.targetLang !== settingsRef.value.target_language);
+      const titleTranslationChanged =
+        prevTranslationSettings.value.translateTitlesEnabled !==
+        settingsRef.value.translate_titles_enabled;
 
       // Always apply basic settings immediately (theme, language, etc.)
       // even if validation fails - these don't require API keys
@@ -130,6 +136,7 @@ export function useSettingsAutoSave(settings: Ref<SettingsData> | (() => Setting
           enabled: settingsRef.value.translation_enabled,
           targetLang: settingsRef.value.target_language,
           provider: settingsRef.value.translation_provider,
+          translateTitlesEnabled: settingsRef.value.translate_titles_enabled,
         };
         // Notify ArticleList about translation settings change
         window.dispatchEvent(
@@ -137,11 +144,26 @@ export function useSettingsAutoSave(settings: Ref<SettingsData> | (() => Setting
             detail: {
               enabled: settingsRef.value.translation_enabled,
               targetLang: settingsRef.value.target_language,
+              translateTitlesEnabled: settingsRef.value.translate_titles_enabled,
             },
           })
         );
         // Refresh articles to show without translations, then re-translate if enabled
         store.fetchArticles();
+      }
+
+      if (titleTranslationChanged && !translationChanged) {
+        prevTranslationSettings.value.translateTitlesEnabled =
+          settingsRef.value.translate_titles_enabled;
+        window.dispatchEvent(
+          new CustomEvent('translation-settings-changed', {
+            detail: {
+              enabled: settingsRef.value.translation_enabled,
+              targetLang: settingsRef.value.target_language,
+              translateTitlesEnabled: settingsRef.value.translate_titles_enabled,
+            },
+          })
+        );
       }
 
       // Refresh articles if show_hidden_articles changed

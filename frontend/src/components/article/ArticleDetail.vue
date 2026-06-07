@@ -5,8 +5,9 @@ import ArticleToolbar from './ArticleToolbar.vue';
 import ArticleContent from './ArticleContent.vue';
 import ImageViewer from '../common/ImageViewer.vue';
 import FindInPage from '../common/FindInPage.vue';
+import type { TranslationDisplayMode } from '@/types/translation';
 
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 
 const {
   article,
@@ -36,11 +37,11 @@ const {
   t,
 } = useArticleDetail();
 
-const showTranslations = ref(true);
+const translationMode = ref<TranslationDisplayMode>('original');
 const showFindInPage = ref(false);
 
-function toggleTranslations() {
-  showTranslations.value = !showTranslations.value;
+function setTranslationMode(mode: TranslationDisplayMode) {
+  translationMode.value = mode;
 }
 
 function openFindInPage() {
@@ -69,12 +70,28 @@ function handleKeydown(e: KeyboardEvent) {
   // See useKeyboardShortcuts.ts which properly checks for editable elements
 }
 
+function handleTranslationSettingsChanged(event: Event) {
+  const customEvent = event as CustomEvent<{ enabled?: boolean }>;
+  if (customEvent.detail?.enabled === false) {
+    translationMode.value = 'original';
+  }
+}
+
+watch(
+  () => article.value?.id,
+  () => {
+    translationMode.value = 'original';
+  }
+);
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown);
+  window.addEventListener('translation-settings-changed', handleTranslationSettingsChanged);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown);
+  window.removeEventListener('translation-settings-changed', handleTranslationSettingsChanged);
 });
 </script>
 
@@ -97,14 +114,14 @@ onBeforeUnmount(() => {
       <ArticleToolbar
         :article="article"
         :show-content="showContent"
-        :show-translations="showTranslations"
+        :translation-mode="translationMode"
         @close="close"
         @toggle-content-view="toggleContentView"
         @toggle-read="toggleRead"
         @toggle-favorite="toggleFavorite"
         @toggle-read-later="toggleReadLater"
         @open-original="openOriginal"
-        @toggle-translations="toggleTranslations"
+        @set-translation-mode="setTranslationMode"
         @export-to-obsidian="exportToObsidian"
         @export-to-notion="exportToNotion"
         @export-to-zotero="exportToZotero"
@@ -127,7 +144,7 @@ onBeforeUnmount(() => {
         :article-content="articleContent"
         :is-loading-content="isLoadingContent"
         :attach-image-event-listeners="attachImageEventListeners"
-        :show-translations="showTranslations"
+        :translation-mode="translationMode"
         :show-content="showContent"
         @retry-load-content="handleRetryLoadContent"
       />

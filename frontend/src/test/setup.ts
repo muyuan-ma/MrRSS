@@ -53,8 +53,8 @@ global.fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit): Promise<Res
         auto_update: false,
         shortcuts: '{}',
         image_gallery_enabled: 'false',
-        translation_enabled: 'false',
-        target_language: 'en',
+        translation_enabled: 'true',
+        target_language: 'zh',
         show_article_preview_images: 'false',
         default_view_mode: 'original',
       })

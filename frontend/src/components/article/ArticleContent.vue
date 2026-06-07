@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n';
 import { PhSpinnerGap, PhArticleNyTimes } from '@phosphor-icons/vue';
 import type { Article } from '@/types/models';
+import type { TranslationDisplayMode } from '@/types/translation';
 import ArticleTitle from './parts/ArticleTitle.vue';
 import ArticleSummary from './parts/ArticleSummary.vue';
 import ArticleBody from './parts/ArticleBody.vue';
@@ -35,17 +36,70 @@ interface SummaryResult {
   error?: string;
 }
 
+interface StringCacheEntry {
+  value: string;
+  size: number;
+  lastUsed: number;
+}
+
+const FULL_ARTICLE_CACHE_LIMIT_BYTES = 20 * 1024 * 1024;
+const TRANSLATED_RENDER_CACHE_LIMIT_BYTES = 16 * 1024 * 1024;
+const fullArticleContentCache = new Map<number, StringCacheEntry>();
+const translatedRenderCache = new Map<string, StringCacheEntry>();
+const cacheTextEncoder = new TextEncoder();
+
+function estimateStringBytes(value: string): number {
+  return cacheTextEncoder.encode(value).length;
+}
+
+function pruneStringCache<K>(cache: Map<K, StringCacheEntry>, limitBytes: number): void {
+  let totalBytes = 0;
+  cache.forEach((entry) => {
+    totalBytes += entry.size;
+  });
+
+  if (totalBytes <= limitBytes) return;
+
+  const entriesByAge = Array.from(cache.entries()).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+  for (const [key, entry] of entriesByAge) {
+    cache.delete(key);
+    totalBytes -= entry.size;
+    if (totalBytes <= limitBytes) break;
+  }
+}
+
+function setStringCache<K>(
+  cache: Map<K, StringCacheEntry>,
+  key: K,
+  value: string,
+  limitBytes: number
+): void {
+  cache.set(key, {
+    value,
+    size: estimateStringBytes(value),
+    lastUsed: Date.now(),
+  });
+  pruneStringCache(cache, limitBytes);
+}
+
+function getStringCache<K>(cache: Map<K, StringCacheEntry>, key: K): string | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  entry.lastUsed = Date.now();
+  return entry.value;
+}
+
 interface Props {
   article: Article;
   articleContent: string;
   isLoadingContent: boolean;
   attachImageEventListeners?: () => void;
-  showTranslations?: boolean;
+  translationMode?: TranslationDisplayMode;
   showContent?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  showTranslations: true,
+  translationMode: 'original',
   attachImageEventListeners: undefined,
   showContent: true,
 });
@@ -116,6 +170,10 @@ onMounted(async () => {
 
   // Listen for summary settings changes
   window.addEventListener('summary-settings-changed', onSummarySettingsChanged as EventListener);
+  window.addEventListener(
+    'translation-settings-changed',
+    onTranslationSettingsChanged as EventListener
+  );
 });
 
 // Computed to check if chat should be shown
@@ -169,7 +227,9 @@ const summaryEnabled = computed(() => summarySettings.value.enabled);
 const summaryProvider = computed(() => summarySettings.value.provider);
 const summaryTriggerMode = computed(() => summarySettings.value.triggerMode);
 const translationEnabled = computed(() => translationSettings.value.enabled);
+const translationOnlyModeActive = computed(() => props.translationMode === 'translated');
 const targetLanguage = computed(() => translationSettings.value.targetLang);
+const titleTranslationEnabled = computed(() => appSettings.value.translate_titles_enabled);
 
 // Current article summary
 const summaryResult = ref<SummaryResult | null>(null);
@@ -183,7 +243,9 @@ const isTranslatingTitle = ref(false);
 const isTranslatingContent = ref(false);
 const lastTranslatedArticleId = ref<number | null>(null);
 const lastTranslatedContentHash = ref<string>(''); // Track translated content by hash
+const lastTranslatedTitleKey = ref('');
 const translationSkipped = ref(false);
+const activeContentTranslationRun = ref(0);
 
 // Load settings using composables
 async function loadSettings() {
@@ -195,7 +257,7 @@ async function loadSettings() {
 async function translateText(
   text: string,
   force: boolean = false
-): Promise<{ text: string; html: string }> {
+): Promise<{ text: string; html: string; skipped?: boolean; reason?: string }> {
   if (!text || !translationEnabled.value) {
     return { text: '', html: '' };
   }
@@ -229,27 +291,118 @@ async function translateText(
       return {
         text: data.translated_text || '',
         html: data.html || '',
+        skipped: data.skipped === 'true' || data.skipped === true,
+        reason: data.reason || '',
       };
     } else {
-      window.showToast(t('common.errors.translatingContent'), 'error');
+      const message = await readTranslationError(res);
+      window.showToast(`${t('common.errors.translatingContent')}: ${message}`, 'error');
     }
-  } catch {
-    window.showToast(t('common.errors.translating'), 'error');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.showToast(`${t('common.errors.translating')}: ${message}`, 'error');
   }
   return { text: '', html: '' };
 }
 
+async function readTranslationError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    return data?.error?.message || data?.message || res.statusText || `HTTP ${res.status}`;
+  } catch {
+    return res.statusText || `HTTP ${res.status}`;
+  }
+}
+
+async function translateArticleTitle(options: { force?: boolean } = {}) {
+  const article = props.article;
+  if (
+    !article?.id ||
+    !article.title ||
+    !translationEnabled.value ||
+    !titleTranslationEnabled.value ||
+    props.translationMode === 'original' ||
+    isTranslatingTitle.value
+  ) {
+    return;
+  }
+
+  if (!options.force && article.translated_title && article.translated_title !== article.title) {
+    translatedTitle.value = article.translated_title;
+    return;
+  }
+
+  const translationKey = `${article.id}:${targetLanguage.value}:${article.title}`;
+  if (!options.force && lastTranslatedTitleKey.value === translationKey && translatedTitle.value) {
+    return;
+  }
+
+  isTranslatingTitle.value = true;
+  try {
+    const res = await fetch('/api/articles/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        article_id: article.id,
+        title: article.title,
+        target_language: targetLanguage.value,
+        force: options.force === true,
+      }),
+    });
+
+    if (!res.ok) {
+      const message = await readTranslationError(res);
+      window.showToast(`${t('common.errors.translatingTitle')}: ${message}`, 'error');
+      return;
+    }
+
+    const data = await res.json();
+    translatedTitle.value = data.translated_title || '';
+    article.translated_title = translatedTitle.value;
+    lastTranslatedTitleKey.value = translationKey;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    window.showToast(`${t('common.errors.translating')}: ${message}`, 'error');
+  } finally {
+    isTranslatingTitle.value = false;
+  }
+}
+
 // Force translate content
 async function forceTranslateContent() {
-  if (!props.articleContent) return;
+  if (!displayContent.value) return;
 
-  await translateContentParagraphs(props.articleContent);
+  await translateContentParagraphs(displayContent.value, { force: true, notify: true });
+}
+
+async function handleFullArticleContentReady(showErrors: boolean) {
+  if (showErrors) {
+    window.showToast(t('article.action.fullArticleFetched'), 'success');
+  }
+
+  if (!props.article) return;
+
+  if (shouldWaitForFullContentBeforeSummary.value) {
+    setTimeout(() => generateSummary(props.article), 100);
+  }
+
+  if (translationEnabled.value && props.translationMode !== 'original') {
+    await nextTick();
+    await translateContentParagraphs(fullArticleContent.value);
+  }
 }
 
 // Fetch full article content from the original URL
 // @param showErrors - whether to show error toasts (default: true for manual clicks, false for auto-fetch)
 async function fetchFullArticle(showErrors: boolean = true) {
   if (!props.article?.id) return;
+
+  const cachedContent = getStringCache(fullArticleContentCache, props.article.id);
+  if (cachedContent) {
+    fullArticleContent.value = cachedContent;
+    await handleFullArticleContentReady(showErrors);
+    return;
+  }
 
   isFetchingFullArticle.value = true;
   try {
@@ -270,28 +423,13 @@ async function fetchFullArticle(showErrors: boolean = true) {
       }
 
       fullArticleContent.value = content;
-      if (showErrors) {
-        window.showToast(t('article.action.fullArticleFetched'), 'success');
-      }
-
-      // After fetching full content, regenerate summary and trigger translation
-      if (props.article) {
-        // Generate summary if we should wait for full content
-        // This handles the case where:
-        // 1. Summary uses AI auto trigger OR local algorithm
-        // 2. AND auto-show all content is enabled
-        if (shouldWaitForFullContentBeforeSummary.value) {
-          setTimeout(() => generateSummary(props.article), 100);
-        }
-
-        if (translationEnabled.value) {
-          // Only translate content, not title (title translation is cached in DB)
-          // Content hash will automatically detect new content and trigger translation
-          // Wait for DOM to update with new content before translating
-          await nextTick();
-          await translateContentParagraphs(fullArticleContent.value);
-        }
-      }
+      setStringCache(
+        fullArticleContentCache,
+        props.article.id,
+        content,
+        FULL_ARTICLE_CACHE_LIMIT_BYTES
+      );
+      await handleFullArticleContentReady(showErrors);
     } else {
       console.error('Error fetching full article:', res.status);
       if (showErrors) {
@@ -360,16 +498,6 @@ const shouldWaitForFullContentBeforeSummary = computed(() => {
   return shouldAutoExpandContent.value;
 });
 
-// Translate title
-async function translateTitle(article: Article) {
-  if (!translationEnabled.value || !article?.title) return;
-
-  isTranslatingTitle.value = true;
-  const translation = await translateText(article.title);
-  translatedTitle.value = translation.text;
-  isTranslatingTitle.value = false;
-}
-
 // Simple hash function for content (for detecting content changes)
 function simpleHash(str: string): string {
   let hash = 0;
@@ -382,25 +510,41 @@ function simpleHash(str: string): string {
 }
 
 // Translate content paragraphs while preserving inline elements (formulas, code, images)
-async function translateContentParagraphs(content: string) {
+async function translateContentParagraphs(
+  content: string,
+  options: { force?: boolean; notify?: boolean } = {}
+) {
   if (!translationEnabled.value || !content) {
+    return;
+  }
+
+  if (isTranslatingContent.value && !options.force) {
     return;
   }
 
   // Calculate content hash to detect if content has changed
   const contentHash = simpleHash(content);
+  const articleId = props.article?.id || null;
+  const cacheKey = articleId ? `${articleId}:${targetLanguage.value}:${contentHash}` : '';
 
   // Prevent duplicate translations for the same content
   // Check both article ID and content hash to handle RSS content vs full content
   if (
+    !options.force &&
     lastTranslatedArticleId.value === props.article?.id &&
     lastTranslatedContentHash.value === contentHash
   ) {
     return;
   }
 
+  if (options.force && cacheKey) {
+    translatedRenderCache.delete(cacheKey);
+  }
+
   isTranslatingContent.value = true;
-  lastTranslatedArticleId.value = props.article?.id || null;
+  const translationRunId = activeContentTranslationRun.value + 1;
+  activeContentTranslationRun.value = translationRunId;
+  lastTranslatedArticleId.value = articleId;
   lastTranslatedContentHash.value = contentHash;
 
   // Wait for content to render
@@ -411,6 +555,21 @@ async function translateContentParagraphs(content: string) {
   if (!proseContainer) {
     isTranslatingContent.value = false;
     return;
+  }
+
+  if (cacheKey && !options.force) {
+    const cachedRenderedTranslation = getStringCache(translatedRenderCache, cacheKey);
+    if (cachedRenderedTranslation) {
+      proseContainer.innerHTML = cachedRenderedTranslation;
+      await nextTick();
+      proseContainer.querySelectorAll('.translation-text').forEach((el) => {
+        renderMathFormulas(el as HTMLElement);
+        highlightCodeBlocks(el as HTMLElement);
+      });
+      await reattachImageInteractions();
+      isTranslatingContent.value = false;
+      return;
+    }
   }
 
   // Remove any existing translations first
@@ -447,24 +606,12 @@ async function translateContentParagraphs(content: string) {
 
   // Track which elements we've already translated to avoid duplicates
   const translatedElements = new Set<HTMLElement>();
+  let attemptedCount = 0;
+  let translatedCount = 0;
+  let skippedAlreadyTargetCount = 0;
 
-  // Process elements level by level to handle nested structures correctly
-  // First, get all elements and sort them by depth (shallowest first)
+  // Keep DOM order so translations appear from the top of the article downward.
   const allElements = Array.from(proseContainer.querySelectorAll(textTags.join(',')));
-
-  // Sort by depth (number of ancestors) to process outermost elements first
-  allElements.sort((a, b) => {
-    const getDepth = (el: Element): number => {
-      let depth = 0;
-      let parent = el.parentElement;
-      while (parent && parent !== proseContainer) {
-        depth++;
-        parent = parent.parentElement;
-      }
-      return depth;
-    };
-    return getDepth(a) - getDepth(b);
-  });
 
   // Helper function to check if an element can contain nested translatable content
   const canContainNestedTranslatableElements = (el: HTMLElement): boolean => {
@@ -540,8 +687,18 @@ async function translateContentParagraphs(content: string) {
     if (!textWithPlaceholders || textWithPlaceholders.length < 2) continue;
 
     // Translate the text (with placeholders and link markers)
-    const translation = await translateText(textWithPlaceholders);
+    attemptedCount++;
+    const translation = await translateText(textWithPlaceholders, options.force === true);
+
+    if (translationRunId !== activeContentTranslationRun.value || props.article?.id !== articleId) {
+      return;
+    }
+
     const translatedText = translation.text;
+
+    if (translation.skipped && translation.reason === 'already_target_language') {
+      skippedAlreadyTargetCount++;
+    }
 
     // Skip if translation is same as original or empty
     if (!translatedText || translatedText === textWithPlaceholders) {
@@ -553,6 +710,7 @@ async function translateContentParagraphs(content: string) {
 
     // Determine how to insert translation based on element type
     const tagName = htmlEl.tagName;
+    const sourceClass = `translation-from-${tagName.toLowerCase()}`;
 
     if (
       tagName === 'LI' ||
@@ -561,27 +719,39 @@ async function translateContentParagraphs(content: string) {
       tagName === 'DD' ||
       tagName === 'DT'
     ) {
-      // For list items, table cells, definition list items: append translation inside the same element
+      // For list items, table cells, definition list items: keep the parent structure and place
+      // translated text above a wrapped original block.
       const translationEl = document.createElement('div');
-      translationEl.className = 'translation-text translation-inline';
+      translationEl.className = `translation-text translation-inline ${sourceClass}`;
       translationEl.innerHTML = translatedHTML;
+
+      const originalWrapper = document.createElement('div');
+      originalWrapper.className = 'translation-original-content translated-original';
+      while (htmlEl.firstChild) {
+        originalWrapper.appendChild(htmlEl.firstChild);
+      }
+
       htmlEl.appendChild(translationEl);
+      htmlEl.appendChild(originalWrapper);
     } else if (htmlEl.closest('blockquote')) {
-      // For elements inside blockquote: append translation inside, styled differently
+      // For elements inside blockquote: place the translation before the original paragraph.
       const translationEl = document.createElement('div');
-      translationEl.className = 'translation-text translation-blockquote';
+      translationEl.className = `translation-text translation-blockquote ${sourceClass}`;
       translationEl.innerHTML = translatedHTML;
-      htmlEl.appendChild(translationEl);
+      htmlEl.classList.add('translated-original');
+      htmlEl.parentNode?.insertBefore(translationEl, htmlEl);
     } else {
-      // For standalone paragraphs, headings, figcaption: insert after as sibling
+      // For standalone paragraphs, headings, figcaption: insert translation above the original.
       const translationEl = document.createElement('div');
-      translationEl.className = 'translation-text';
+      translationEl.className = `translation-text ${sourceClass}`;
       translationEl.innerHTML = translatedHTML;
-      htmlEl.parentNode?.insertBefore(translationEl, htmlEl.nextSibling);
+      htmlEl.classList.add('translated-original');
+      htmlEl.parentNode?.insertBefore(translationEl, htmlEl);
     }
 
     // Mark this element as translated
     translatedElements.add(htmlEl);
+    translatedCount++;
   }
 
   // Re-apply rendering enhancements to translation elements (for math formulas)
@@ -595,11 +765,28 @@ async function translateContentParagraphs(content: string) {
   // This includes unwrapping images from links, attaching image handlers, and link handlers
   await reattachImageInteractions();
 
+  if (cacheKey && translatedCount > 0) {
+    setStringCache(
+      translatedRenderCache,
+      cacheKey,
+      proseContainer.innerHTML,
+      TRANSLATED_RENDER_CACHE_LIMIT_BYTES
+    );
+  }
+
   isTranslatingContent.value = false;
+
+  if (options.notify) {
+    if (translatedCount > 0) {
+      window.showToast(t('article.translation.contentTranslated'), 'success');
+    } else if (attemptedCount > 0 && skippedAlreadyTargetCount > 0) {
+      window.showToast(t('article.translation.alreadyTargetLanguage'), 'info');
+    }
+  }
 }
 
 async function reattachImageInteractions() {
-  if (!props.attachImageEventListeners || !props.articleContent) return;
+  if (!props.attachImageEventListeners || !displayContent.value) return;
   await nextTick();
   props.attachImageEventListeners();
 }
@@ -670,6 +857,23 @@ async function onSummarySettingsChanged(): Promise<void> {
   }
 }
 
+function onTranslationSettingsChanged(event: Event): void {
+  fetchSettings().catch((e) => {
+    console.error('Error fetching settings after translation settings changed:', e);
+  });
+
+  const customEvent = event as CustomEvent<{
+    enabled?: boolean;
+    targetLang?: string;
+    translateTitlesEnabled?: boolean;
+  }>;
+  translationSettings.value = {
+    ...translationSettings.value,
+    enabled: customEvent.detail?.enabled ?? translationSettings.value.enabled,
+    targetLang: customEvent.detail?.targetLang ?? translationSettings.value.targetLang,
+  };
+}
+
 // Watch for article changes and regenerate summary + translations
 watch(
   () => props.article?.id,
@@ -686,7 +890,11 @@ watch(
       }
 
       summaryResult.value = null;
-      translatedTitle.value = '';
+      translatedTitle.value = props.article?.translated_title || '';
+      isTranslatingTitle.value = false;
+      activeContentTranslationRun.value++;
+      isTranslatingContent.value = false;
+      lastTranslatedTitleKey.value = '';
       lastTranslatedArticleId.value = null; // Reset translation tracking
       fullArticleContent.value = ''; // Reset full article content when switching articles
 
@@ -710,11 +918,6 @@ watch(
             setTimeout(() => generateSummary(props.article), 100);
           }
         }
-
-        // Translate title
-        if (translationEnabled.value) {
-          translateTitle(props.article);
-        }
       }
     }
   }
@@ -725,14 +928,14 @@ watch(
 // 1. Content is loaded from cache (isLoadingContent never changes)
 // 2. Content is fetched and becomes available
 watch(
-  () => [props.article?.id, props.articleContent, translationEnabled.value] as const,
+  () => [props.article?.id, props.articleContent, translationSettings.value.enabled] as const,
   async (newValue, oldValue) => {
-    const [newArticleId, newContent, newTranslationEnabled] = newValue || [
+    const [newArticleId, newContent, newAutoTranslationEnabled] = newValue || [
       undefined,
       undefined,
       false,
     ];
-    const [oldArticleId, oldContent, oldTranslationEnabled] = oldValue || [
+    const [oldArticleId, oldContent, oldAutoTranslationEnabled] = oldValue || [
       undefined,
       undefined,
       false,
@@ -746,7 +949,7 @@ watch(
     const contentJustLoaded =
       newArticleId && oldContent === '' && newContent && newContent !== oldContent;
     const translationJustEnabled =
-      oldTranslationEnabled === false && newTranslationEnabled === true;
+      oldAutoTranslationEnabled === false && newAutoTranslationEnabled === true;
 
     const shouldTrigger =
       newContent && newArticleId && (articleChanged || contentJustLoaded || translationJustEnabled);
@@ -784,7 +987,11 @@ watch(
       }
 
       // Translate content if enabled
-      if (newTranslationEnabled && lastTranslatedArticleId.value !== newArticleId) {
+      if (
+        newAutoTranslationEnabled &&
+        props.translationMode !== 'original' &&
+        lastTranslatedArticleId.value !== newArticleId
+      ) {
         await nextTick();
         translateContentParagraphs(newContent);
       }
@@ -793,9 +1000,41 @@ watch(
   { immediate: true } // Run immediately on component mount
 );
 
+watch(
+  () => props.translationMode,
+  async (mode) => {
+    if (mode !== 'original' && displayContent.value) {
+      await nextTick();
+      await translateArticleTitle();
+      await translateContentParagraphs(displayContent.value, { notify: true });
+    }
+  },
+  { flush: 'post' }
+);
+
+watch(
+  () =>
+    [
+      props.article?.id,
+      props.article?.translated_title,
+      props.translationMode,
+      titleTranslationEnabled.value,
+      targetLanguage.value,
+    ] as const,
+  async () => {
+    translatedTitle.value = props.article?.translated_title || '';
+    if (props.translationMode !== 'original') {
+      await translateArticleTitle();
+    }
+  },
+  { flush: 'post' }
+);
+
 onMounted(async () => {
   await loadSettings();
   if (props.article) {
+    translatedTitle.value = props.article.translated_title || '';
+
     // Check for cached summary first
     if (props.article.summary && props.article.summary.trim() !== '') {
       // Load the cached summary by calling API to get HTML
@@ -814,12 +1053,7 @@ onMounted(async () => {
         setTimeout(() => generateSummary(props.article), 100);
       }
     }
-
-    // Translate title
-    if (translationEnabled.value) {
-      translateTitle(props.article);
-    }
-    // Content translation is handled by the watch on [article.id, articleContent]
+    // Content translation is handled by the translation mode watcher.
 
     // Enhance rendering if content is already loaded
     if (props.articleContent && !props.isLoadingContent) {
@@ -878,6 +1112,10 @@ onBeforeUnmount(() => {
   );
 
   window.removeEventListener('summary-settings-changed', onSummarySettingsChanged as EventListener);
+  window.removeEventListener(
+    'translation-settings-changed',
+    onTranslationSettingsChanged as EventListener
+  );
 });
 </script>
 
@@ -891,15 +1129,17 @@ onBeforeUnmount(() => {
       <div
         class="max-w-3xl mx-auto bg-bg-primary [container-type:inline-size]"
         :class="{
-          'hide-translations': !showTranslations,
-          'translation-only-mode': translationSettings.translationOnlyMode,
+          'hide-translations': translationMode === 'original',
+          'bilingual-translation-mode': translationMode === 'bilingual',
+          'translation-only-mode': translationOnlyModeActive,
         }"
       >
         <ArticleTitle
           :article="article"
           :translated-title="translatedTitle"
           :is-translating-title="isTranslatingTitle"
-          :translation-enabled="translationEnabled"
+          :translation-enabled="translationEnabled && translationMode !== 'original'"
+          :translation-mode="translationMode"
           :translation-skipped="translationSkipped"
           :is-translating-content="isTranslatingContent"
           @force-translate="forceTranslateContent"
@@ -924,6 +1164,8 @@ onBeforeUnmount(() => {
           :summary-result="summaryResult"
           :is-loading-summary="isLoadingSummary"
           :translation-enabled="translationEnabled"
+          :translation-mode="translationMode"
+          :target-language="targetLanguage"
           :summary-provider="summaryProvider"
           :summary-trigger-mode="summaryTriggerMode"
           :is-loading-content="props.isLoadingContent"

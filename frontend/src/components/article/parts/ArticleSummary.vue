@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/vue';
 import { useI18n } from 'vue-i18n';
 import { useArticleRendering } from '@/composables/article/useArticleRendering';
+import type { TranslationDisplayMode } from '@/types/translation';
 
 interface Props {
   summaryResult: {
@@ -27,12 +28,16 @@ interface Props {
   } | null;
   isLoadingSummary: boolean;
   translationEnabled: boolean;
+  translationMode?: TranslationDisplayMode;
+  targetLanguage?: string;
   summaryProvider?: string;
   summaryTriggerMode?: string;
   isLoadingContent?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  translationMode: 'original',
+  targetLanguage: 'zh',
   summaryProvider: 'local',
   summaryTriggerMode: 'auto',
   isLoadingContent: false,
@@ -49,7 +54,12 @@ const showThinking = ref(false);
 const isAnimating = ref(false);
 const isCopying = ref(false);
 const summaryContentEl = ref<HTMLElement | null>(null);
+const translatedSummaryContentEl = ref<HTMLElement | null>(null);
 const { renderMathFormulas, highlightCodeBlocks } = useArticleRendering();
+const translatedSummaryText = ref('');
+const translatedSummaryHtml = ref('');
+const isTranslatingSummary = ref(false);
+const lastTranslatedSummaryKey = ref('');
 
 // Enhanced loading states
 const loadingTime = ref(0);
@@ -116,7 +126,11 @@ async function copySummary() {
 
   isCopying.value = true;
   try {
-    await navigator.clipboard.writeText(props.summaryResult.summary);
+    const text =
+      props.translationMode === 'translated' && translatedSummaryText.value
+        ? translatedSummaryText.value
+        : props.summaryResult.summary;
+    await navigator.clipboard.writeText(text);
     window.showToast(t('common.toast.copiedToClipboard'), 'success');
   } catch (error) {
     console.error('Failed to copy summary:', error);
@@ -152,16 +166,88 @@ async function handleSummaryLinkClick(event: MouseEvent) {
 
 async function enhanceSummaryRendering() {
   await nextTick();
-  if (!summaryContentEl.value || !showSummary.value) return;
+  if (!showSummary.value) return;
 
-  renderMathFormulas(summaryContentEl.value);
-  highlightCodeBlocks(summaryContentEl.value);
+  [summaryContentEl.value, translatedSummaryContentEl.value].forEach((el) => {
+    if (!el) return;
+    renderMathFormulas(el);
+    highlightCodeBlocks(el);
+  });
+}
+
+async function translateSummary() {
+  if (
+    props.translationMode === 'original' ||
+    !props.translationEnabled ||
+    !props.summaryResult?.summary
+  ) {
+    return;
+  }
+
+  const summary = props.summaryResult.summary;
+  const translationKey = `${props.targetLanguage}:${summary}`;
+  if (lastTranslatedSummaryKey.value === translationKey && translatedSummaryHtml.value) {
+    return;
+  }
+
+  isTranslatingSummary.value = true;
+  try {
+    const res = await fetch('/api/articles/translate-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: summary,
+        target_language: props.targetLanguage,
+        force: false,
+      }),
+    });
+
+    if (!res.ok) {
+      const message = await readTranslationError(res);
+      window.showToast(`${t('common.errors.translatingContent')}: ${message}`, 'error');
+      return;
+    }
+
+    const data = await res.json();
+    translatedSummaryText.value = data.translated_text || summary;
+    translatedSummaryHtml.value = data.html || translatedSummaryText.value;
+    lastTranslatedSummaryKey.value = translationKey;
+  } catch (error) {
+    console.error('Failed to translate summary:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    window.showToast(`${t('common.errors.translating')}: ${message}`, 'error');
+  } finally {
+    isTranslatingSummary.value = false;
+    enhanceSummaryRendering();
+  }
+}
+
+async function readTranslationError(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    return data?.error?.message || data?.message || res.statusText || `HTTP ${res.status}`;
+  } catch {
+    return res.statusText || `HTTP ${res.status}`;
+  }
 }
 
 watch(
-  () => [props.summaryResult?.html, props.summaryResult?.summary, showSummary.value],
+  () => [
+    props.summaryResult?.html,
+    props.summaryResult?.summary,
+    translatedSummaryHtml.value,
+    showSummary.value,
+  ],
   () => {
     enhanceSummaryRendering();
+  },
+  { immediate: true, flush: 'post' }
+);
+
+watch(
+  () => [props.summaryResult?.summary, props.translationMode, props.targetLanguage] as const,
+  () => {
+    translateSummary();
   },
   { immediate: true, flush: 'post' }
 );
@@ -285,8 +371,30 @@ onUpdated(() => {
 
           <!-- Summary Content -->
           <div
-            ref="summaryContentEl"
+            v-if="isTranslatingSummary && translationMode !== 'original' && !translatedSummaryHtml"
+            class="flex items-center gap-2 py-2 text-xs text-text-secondary"
+          >
+            <PhSpinnerGap :size="14" class="animate-spin" />
+            <span>{{ t('setting.content.translatingContent') }}</span>
+          </div>
+
+          <div
+            v-if="translationMode !== 'original' && translatedSummaryHtml"
+            ref="translatedSummaryContentEl"
             class="text-xs text-text-primary leading-snug select-text prose prose-xs max-w-none"
+            @click="handleSummaryLinkClick"
+            v-html="translatedSummaryHtml"
+          ></div>
+
+          <div
+            v-if="translationMode !== 'translated'"
+            ref="summaryContentEl"
+            :class="[
+              'text-xs leading-snug select-text prose prose-xs max-w-none',
+              translationMode === 'bilingual'
+                ? 'summary-original mt-2 border-t border-dashed border-border pt-2 text-text-secondary'
+                : 'text-text-primary',
+            ]"
             @click="handleSummaryLinkClick"
             v-html="summaryResult.html || summaryResult.summary"
           ></div>
